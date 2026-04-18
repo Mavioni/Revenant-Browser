@@ -3284,17 +3284,8 @@ function goTo(id) {
   state.screen = id;
   screens.forEach(s => s.classList.toggle('active', s.dataset.screen === id));
   document.querySelectorAll('.right-rail-btns button[data-screen]').forEach(b => b.classList.toggle('active', b.dataset.screen === id));
-  const labels = {
-    start: 'rev://start',
-    browsing: 'wired.com/story/browser-os',
-    graph: 'rev://graph',
-    split: 'rev://split',
-    copilot: 'arxiv.org/abs/2603.04921',
-    gov: 'rev://governor'
-  };
-  const protos = { start: 'REV://', browsing: 'HTTPS://', graph: 'REV://', split: 'REV://', copilot: 'HTTPS://', gov: 'REV://' };
-  document.getElementById('url').value = labels[id];
-  document.getElementById('url-protocol').textContent = protos[id];
+  // URL bar reflects the active tab's real URL — managed by initBrowserBridge,
+  // not by the screen switcher. Previously wrote hardcoded mock URLs here.
   try { localStorage.setItem('revenant-screen', id); } catch(e) {}
 }
 document.querySelectorAll('.right-rail-btns button[data-screen]').forEach(b => {
@@ -3447,15 +3438,27 @@ function setAccent(c) {
     };
   }
 
-  function syncVisibility() {
+  async function syncVisibility() {
     const target = getBrowsingViewport();
-    if (target && target.rect.width > 0 && target.rect.height > 0) {
+    const hasTab = revenant.tabs ? Boolean(await revenant.tabs.active().catch(() => null)) : false;
+
+    if (target && target.rect.width > 0 && target.rect.height > 0 && hasTab) {
+      // Browsing screen + we have a real tab to render. Hide mock; attach live view.
       revenant.browser.setBounds(target.rect, true);
       target.el.style.opacity = '0';
     } else {
+      // Either we're on another screen, or browsing has no tab yet.
+      // Always detach the live view and restore the mock content.
       revenant.browser.setBounds({ x: 0, y: 0, width: 0, height: 0 }, false);
       document.querySelectorAll('.page-viewport').forEach((el) => { el.style.opacity = '1'; });
     }
+  }
+
+  // Re-run syncVisibility when tabs change — new tab should cover the mock,
+  // closing the last tab should restore the mock.
+  if (revenant.tabs) {
+    revenant.tabs.onListUpdated(() => syncVisibility());
+    revenant.tabs.onActiveChanged(() => syncVisibility());
   }
 
   function goToBrowsingScreen() {
