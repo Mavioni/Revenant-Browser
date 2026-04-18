@@ -58,6 +58,44 @@ contextBridge.exposeInMainWorld('revenant', {
     },
   },
 
+  tabs: {
+    list: () => ipcRenderer.invoke('tabs:list'),
+    active: () => ipcRenderer.invoke('tabs:active'),
+    create: (opts?: { url?: string; parentTabId?: string | null; ghostMode?: boolean; egressLane?: string }) =>
+      ipcRenderer.invoke('tabs:create', opts),
+    switch: (tabId: string) => ipcRenderer.invoke('tabs:switch', tabId),
+    close: (tabId: string) => ipcRenderer.invoke('tabs:close', tabId),
+    navigate: (tabId: string, url: string) => ipcRenderer.invoke('tabs:navigate', tabId, url),
+    back: (tabId: string) => ipcRenderer.invoke('tabs:back', tabId),
+    forward: (tabId: string) => ipcRenderer.invoke('tabs:forward', tabId),
+    reload: (tabId: string) => ipcRenderer.invoke('tabs:reload', tabId),
+    reshuffleIdentity: (tabId: string) => ipcRenderer.invoke('tabs:reshuffle-identity', tabId),
+    setEgressLane: (tabId: string, lane: string) => ipcRenderer.invoke('tabs:set-egress-lane', tabId, lane),
+    graphSnapshot: () => ipcRenderer.invoke('tabs:graph-snapshot'),
+    setBounds: (bounds: { x: number; y: number; width: number; height: number }, visible: boolean) =>
+      ipcRenderer.invoke('tabs:set-bounds', bounds, visible),
+    onListUpdated: (callback: (list: unknown[]) => void) => {
+      const listener = (_event: unknown, list: unknown) => callback(list as unknown[]);
+      ipcRenderer.on('tabs:list-updated', listener);
+      return () => ipcRenderer.removeListener('tabs:list-updated', listener);
+    },
+    onActiveChanged: (callback: (active: unknown) => void) => {
+      const listener = (_event: unknown, active: unknown) => callback(active);
+      ipcRenderer.on('tabs:active-changed', listener);
+      return () => ipcRenderer.removeListener('tabs:active-changed', listener);
+    },
+    onNavUpdated: (callback: (tab: unknown) => void) => {
+      const listener = (_event: unknown, tab: unknown) => callback(tab);
+      ipcRenderer.on('tabs:nav-updated', listener);
+      return () => ipcRenderer.removeListener('tabs:nav-updated', listener);
+    },
+    onGraphUpdated: (callback: (graph: unknown[]) => void) => {
+      const listener = (_event: unknown, graph: unknown) => callback(graph as unknown[]);
+      ipcRenderer.on('tabs:graph-updated', listener);
+      return () => ipcRenderer.removeListener('tabs:graph-updated', listener);
+    },
+  },
+
   on: (eventName: string, callback: (...args: unknown[]) => void) => {
     const ALLOWED_CHANNELS = new Set([
       'companion:runtime-health',

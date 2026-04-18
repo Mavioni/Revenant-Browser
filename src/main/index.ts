@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, ipcMain, Tray, Menu, desktopCapturer } from 'electron';
+import { app, BrowserWindow, ipcMain, Tray, Menu, desktopCapturer } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { setupTray } from './tray';
@@ -6,7 +6,8 @@ import { CompanionStore } from './companion-store';
 import { RuntimeSupervisor } from './runtime-supervisor';
 import { SpeechService } from './speech-service';
 import { OpenClawGatewayClient } from './openclaw-client';
-import { NAV_HOME_URL, normalizeUrl, safeWindowOpenUrl } from './url-utils';
+import { NAV_HOME_URL, normalizeUrl } from './url-utils';
+import { EgressLane, TabManager } from './tab-manager';
 import {
   ExecutionResult,
   PermissionTier,
@@ -19,10 +20,7 @@ let companionStore: CompanionStore;
 let runtimeSupervisor: RuntimeSupervisor;
 let speechService: SpeechService;
 let openClawClient: OpenClawGatewayClient;
-
-let browserView: WebContentsView | null = null;
-let browserViewAttached = false;
-let browserViewBounds = { x: 0, y: 0, width: 0, height: 0 };
+let tabManager: TabManager;
 
 // Keys in the config that must NEVER be exposed to the renderer.
 const SENSITIVE_CONFIG_KEYS = new Set(['leluGitHubToken']);
@@ -130,56 +128,6 @@ function createWindow(): void {
 
 function broadcastCompanionEvent(channel: string, payload: unknown): void {
   mainWindow?.webContents.send(channel, payload);
-}
-
-function emitBrowserNav(): void {
-  if (!browserView || !mainWindow) return;
-  const wc = browserView.webContents;
-  mainWindow.webContents.send('browser:nav-updated', {
-    url: wc.getURL(),
-    title: wc.getTitle(),
-    canGoBack: wc.navigationHistory?.canGoBack?.() ?? false,
-    canGoForward: wc.navigationHistory?.canGoForward?.() ?? false,
-    loading: wc.isLoading(),
-  });
-}
-
-function createBrowserView(): WebContentsView {
-  const view = new WebContentsView({
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  const wc = view.webContents;
-  wc.on('did-navigate', emitBrowserNav);
-  wc.on('did-navigate-in-page', emitBrowserNav);
-  wc.on('did-start-loading', emitBrowserNav);
-  wc.on('did-stop-loading', emitBrowserNav);
-  wc.on('page-title-updated', emitBrowserNav);
-
-  // Respect target=_blank by routing to the same view — but only for safe schemes.
-  wc.setWindowOpenHandler(({ url }) => {
-    const safe = safeWindowOpenUrl(url);
-    if (safe) wc.loadURL(safe).catch(() => undefined);
-    return { action: 'deny' };
-  });
-
-  return view;
-}
-
-function attachBrowserView(): void {
-  if (!browserView || !mainWindow || browserViewAttached) return;
-  mainWindow.contentView.addChildView(browserView);
-  browserView.setBounds(browserViewBounds);
-  browserViewAttached = true;
-}
-
-function detachBrowserView(): void {
-  if (!browserView || !mainWindow || !browserViewAttached) return;
-  mainWindow.contentView.removeChildView(browserView);
-  browserViewAttached = false;
 }
 
 function scrubConfigForRenderer(config: Record<string, unknown>): Record<string, unknown> {
@@ -315,71 +263,87 @@ async function initialize(): Promise<void> {
     return result;
   });
 
-  // Browsing engine — WebContentsView attached under the design's chrome
-  browserView = createBrowserView();
+  // Tab manager — owns one WebContentsView per tab.
+  tabManager = new TabManager(mainWindow!);
 
-  ipcMain.handle('browser:navigate', async (_event, url: string) => {
-    if (!browserView) return { ok: false, error: 'view-not-ready' };
-    const resolved = normalizeUrl(url);
-    try {
-      await browserView.webContents.loadURL(resolved);
-      emitBrowserNav();
-      return { ok: true, url: resolved };
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error), url: resolved };
+  tabManager.onListUpdated((list) => mainWindow?.webContents.send('tabs:list-updated', list));
+  tabManager.onActiveChanged((active) => {
+    mainWindow?.webContents.send('tabs:active-changed', active);
+    // Back-compat: renderer's existing omnibox bridge listens for browser:nav-updated.
+    if (active) {
+      mainWindow?.webContents.send('browser:nav-updated', {
+        url: active.url,
+        title: active.title,
+        canGoBack: active.canGoBack,
+        canGoForward: active.canGoForward,
+        loading: active.loading,
+      });
     }
   });
+  tabManager.onNavUpdated((tab) => {
+    mainWindow?.webContents.send('tabs:nav-updated', tab);
+    const activeId = tabManager.active()?.id;
+    if (tab.id === activeId) {
+      mainWindow?.webContents.send('browser:nav-updated', {
+        url: tab.url,
+        title: tab.title,
+        canGoBack: tab.canGoBack,
+        canGoForward: tab.canGoForward,
+        loading: tab.loading,
+      });
+    }
+  });
+  tabManager.onGraphUpdated((graph) => mainWindow?.webContents.send('tabs:graph-updated', graph));
 
-  ipcMain.handle('browser:back', () => {
-    const wc = browserView?.webContents;
-    if (wc?.navigationHistory?.canGoBack?.()) {
-      wc.navigationHistory.goBack();
-      return { ok: true, navigated: true };
-    }
-    return { ok: true, navigated: false };
+  // --- tabs.* IPC ---
+  ipcMain.handle('tabs:list', () => tabManager.list());
+  ipcMain.handle('tabs:active', () => tabManager.active());
+  ipcMain.handle('tabs:create', (_e, opts?: { url?: string; parentTabId?: string | null; ghostMode?: boolean; egressLane?: EgressLane }) => {
+    return tabManager.create(opts ?? {});
   });
-  ipcMain.handle('browser:forward', () => {
-    const wc = browserView?.webContents;
-    if (wc?.navigationHistory?.canGoForward?.()) {
-      wc.navigationHistory.goForward();
-      return { ok: true, navigated: true };
-    }
-    return { ok: true, navigated: false };
-  });
-  ipcMain.handle('browser:reload', () => browserView?.webContents.reload());
-  ipcMain.handle('browser:home', async () => {
-    if (!browserView) return;
-    await browserView.webContents.loadURL(NAV_HOME_URL);
-    emitBrowserNav();
-  });
-
-  ipcMain.handle('browser:set-bounds', (_event, bounds: { x: number; y: number; width: number; height: number }, visible: boolean) => {
-    browserViewBounds = {
-      x: Math.max(0, Math.round(bounds.x)),
-      y: Math.max(0, Math.round(bounds.y)),
-      width: Math.max(0, Math.round(bounds.width)),
-      height: Math.max(0, Math.round(bounds.height)),
-    };
-    if (visible && browserViewBounds.width > 0 && browserViewBounds.height > 0) {
-      attachBrowserView();
-      browserView?.setBounds(browserViewBounds);
-    } else {
-      detachBrowserView();
-    }
+  ipcMain.handle('tabs:switch', (_e, tabId: string) => tabManager.switch(tabId));
+  ipcMain.handle('tabs:close', (_e, tabId: string) => tabManager.close(tabId));
+  ipcMain.handle('tabs:navigate', (_e, tabId: string, url: string) => tabManager.navigate(tabId, normalizeUrl(url)));
+  ipcMain.handle('tabs:back', (_e, tabId: string) => tabManager.back(tabId));
+  ipcMain.handle('tabs:forward', (_e, tabId: string) => tabManager.forward(tabId));
+  ipcMain.handle('tabs:reload', (_e, tabId: string) => { tabManager.reload(tabId); return { ok: true }; });
+  ipcMain.handle('tabs:reshuffle-identity', (_e, tabId: string) => tabManager.reshuffleIdentity(tabId));
+  ipcMain.handle('tabs:set-egress-lane', (_e, tabId: string, lane: EgressLane) => tabManager.setEgressLane(tabId, lane));
+  ipcMain.handle('tabs:graph-snapshot', () => tabManager.graphSnapshot());
+  ipcMain.handle('tabs:set-bounds', (_e, bounds: { x: number; y: number; width: number; height: number }, visible: boolean) => {
+    tabManager.setBounds(bounds, visible);
     return { ok: true };
   });
 
-  ipcMain.handle('browser:get-state', () => {
-    if (!browserView) return null;
-    const wc = browserView.webContents;
-    return {
-      url: wc.getURL(),
-      title: wc.getTitle(),
-      canGoBack: wc.navigationHistory?.canGoBack?.() ?? false,
-      canGoForward: wc.navigationHistory?.canGoForward?.() ?? false,
-      loading: wc.isLoading(),
-    };
+  // --- browser.* back-compat (A1): omnibox routes to active tab, creates one if none.
+  async function navigateActive(url: string) {
+    const resolved = normalizeUrl(url);
+    let active = tabManager.active();
+    if (!active) active = tabManager.create({ url: resolved });
+    else tabManager.navigate(active.id, resolved);
+    return { ok: true, url: resolved };
+  }
+
+  ipcMain.handle('browser:navigate', async (_e, url: string) => navigateActive(url));
+  ipcMain.handle('browser:back', () => {
+    const a = tabManager.active();
+    return a ? tabManager.back(a.id) : { ok: true, navigated: false };
   });
+  ipcMain.handle('browser:forward', () => {
+    const a = tabManager.active();
+    return a ? tabManager.forward(a.id) : { ok: true, navigated: false };
+  });
+  ipcMain.handle('browser:reload', () => {
+    const a = tabManager.active();
+    if (a) tabManager.reload(a.id);
+    return { ok: true };
+  });
+  ipcMain.handle('browser:home', async () => navigateActive(NAV_HOME_URL));
+  ipcMain.handle('browser:set-bounds', (_e, bounds: { x: number; y: number; width: number; height: number }, visible: boolean) => {
+    tabManager.setBounds(bounds, visible);
+    return { ok: true };
+  });
+  ipcMain.handle('browser:get-state', () => tabManager.active());
 
   // Config — scrub sensitive keys before returning to renderer.
   // Main process reads unscrubbed via getConfig() internally.
@@ -422,6 +386,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   speechService?.stop();
+  tabManager?.dispose();
   if (tray) {
     tray.destroy();
     tray = null;
