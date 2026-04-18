@@ -1946,7 +1946,7 @@
     </div>
     <div class="url-input">
       <span class="url-protocol" id="url-protocol">REV://</span>
-      <input id="url" type="text" />
+      <input id="url" type="text" placeholder="search DuckDuckGo or enter a URL" autocomplete="off" spellcheck="false" />
       <div class="url-badges" id="url-badges">
         <span class="url-badge ok">E2E</span>
         <span class="url-badge">TOR</span>
@@ -2010,7 +2010,7 @@
 
             <div class="start-search">
               <span class="prompt">&gt;_</span>
-              <input type="text" placeholder="query · url · command · pgp-fingerprint · onion" />
+              <input id="start-search-input" type="text" placeholder="search · url · onion" autocomplete="off" />
               <div class="hint">
                 <kbd>⌘</kbd><kbd>K</kbd>
                 <span style="align-self:center;">for commands</span>
@@ -3298,6 +3298,8 @@ function setAccent(c) {
   if (!revenant || !revenant.browser) return; // running standalone via file://
 
   const url = document.getElementById('url');
+  const urlProtocol = document.getElementById('url-protocol');
+  const startSearch = document.getElementById('start-search-input');
   const navButtons = document.querySelectorAll('.addressbar .nav-btns button');
   const btnBack = navButtons[0];
   const btnForward = navButtons[1];
@@ -3318,61 +3320,69 @@ function setAccent(c) {
     const target = getBrowsingViewport();
     if (target && target.rect.width > 0 && target.rect.height > 0) {
       revenant.browser.setBounds(target.rect, true);
-      // Hide the mock article so the live page shows through
       target.el.style.opacity = '0';
     } else {
-      // Hide the view when any other screen is active
       revenant.browser.setBounds({ x: 0, y: 0, width: 0, height: 0 }, false);
       document.querySelectorAll('.page-viewport').forEach((el) => { el.style.opacity = '1'; });
     }
   }
 
-  // URL bar: press Enter to navigate
+  function goToBrowsingScreen() {
+    const browsingBtn = document.querySelector('.right-rail-btns button[data-screen="browsing"]');
+    if (browsingBtn && !document.querySelector('.screen.active[data-screen="browsing"]')) {
+      browsingBtn.click();
+    }
+  }
+
+  function submitQuery(q) {
+    const v = (q || '').trim();
+    if (!v) return;
+    goToBrowsingScreen();
+    setTimeout(() => {
+      syncVisibility();
+      revenant.browser.navigate(v);
+    }, 50);
+  }
+
+  // Top omnibar — Enter to navigate
   if (url) {
     url.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        const v = url.value.trim();
-        if (v) {
-          // Switch to browsing screen + navigate
-          const browsingBtn = document.querySelector('.right-rail-btns button[data-screen="browsing"]');
-          if (browsingBtn && !document.querySelector('.screen.active[data-screen="browsing"]')) {
-            browsingBtn.click();
-            setTimeout(() => {
-              syncVisibility();
-              revenant.browser.navigate(v);
-            }, 50);
-          } else {
-            revenant.browser.navigate(v);
-          }
-        }
-      }
+      if (e.key === 'Enter') submitQuery(url.value);
     });
   }
 
-  // Nav buttons
+  // Start-page search — prominent central bar; same handler
+  if (startSearch) {
+    startSearch.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitQuery(startSearch.value);
+    });
+  }
+
   btnBack && btnBack.addEventListener('click', () => revenant.browser.back());
   btnForward && btnForward.addEventListener('click', () => revenant.browser.forward());
   btnReload && btnReload.addEventListener('click', () => revenant.browser.reload());
 
-  // Observe screen switches via the rail buttons
   railButtons.forEach((b) => b.addEventListener('click', () => setTimeout(syncVisibility, 0)));
-
-  // Observe viewport area resize (window resize, layout changes)
   window.addEventListener('resize', syncVisibility);
   try {
     const ro = new ResizeObserver(syncVisibility);
     document.querySelectorAll('.page-viewport').forEach((el) => ro.observe(el));
   } catch (_) { /* older runtimes */ }
 
-  // React to nav events from the live view
+  // React to nav events — update omnibar URL + protocol badge in real time
   revenant.browser.onNavUpdated((info) => {
-    if (!info) return;
-    if (url && document.activeElement !== url && typeof info.url === 'string' && info.url) {
-      url.value = info.url;
+    if (!info || typeof info.url !== 'string' || !info.url) return;
+    if (url && document.activeElement !== url) url.value = info.url;
+    if (urlProtocol) {
+      try {
+        const parsed = new URL(info.url);
+        urlProtocol.textContent = parsed.protocol.toUpperCase() + '//';
+      } catch (_) {
+        urlProtocol.textContent = 'REV://';
+      }
     }
   });
 
-  // Initial paint
   setTimeout(syncVisibility, 50);
 })();
 
