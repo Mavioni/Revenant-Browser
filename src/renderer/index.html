@@ -1,0 +1,3297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Revenant — a browser that haunts the network</title>
+<link rel="icon" href="assets/revenant-favicon.ico" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ===========================================================
+     REVENANT BROWSER — design tokens
+     =========================================================== */
+  :root {
+    /* TWEAKS — edited live by the panel */
+    --accent: #b8a4ff;
+    --accent-dim: #b8a4ff22;
+    --accent-glow: #b8a4ff40;
+
+    --bg-0: #07070a;
+    --bg-1: #0c0c11;
+    --bg-2: #13131a;
+    --bg-3: #1c1c26;
+    --line: #ffffff10;
+    --line-strong: #ffffff1c;
+    --text-0: #f4f4f8;
+    --text-1: #b8b8c4;
+    --text-2: #6e6e7c;
+    --text-3: #3a3a46;
+    --danger: #ff5370;
+    --warn: #ffc857;
+    --ok: #6cf2b5;
+
+    --font-display: 'Space Grotesk', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+
+    --scanline-opacity: 0.08;
+    --vortex-speed: 40s;
+  }
+
+  /* LIGHT MODE — warm paper tones */
+  :root.light {
+    --bg-0: #f5f3ec;
+    --bg-1: #ecebe3;
+    --bg-2: #e2e0d6;
+    --bg-3: #d4d1c3;
+    --line: #00000012;
+    --line-strong: #00000020;
+    --text-0: #17171c;
+    --text-1: #44444e;
+    --text-2: #7a7a84;
+    --text-3: #adadb4;
+    --ok: #2f9d6a;
+    --warn: #c08a12;
+    --danger: #d62f4f;
+  }
+  :root.light .scanlines { opacity: 0; }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg-0);
+    color: var(--text-0);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    height: 100vh;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: 0.01em;
+  }
+
+  button { font-family: inherit; color: inherit; background: none; border: none; cursor: pointer; padding: 0; }
+  button:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+  /* Scanline overlay */
+  .scanlines {
+    position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+    background-image: repeating-linear-gradient(
+      to bottom,
+      transparent 0, transparent 2px,
+      rgba(255,255,255,var(--scanline-opacity)) 2px,
+      rgba(255,255,255,var(--scanline-opacity)) 3px
+    );
+    mix-blend-mode: overlay;
+    opacity: 0.6;
+  }
+  .scanlines.off { display: none; }
+
+  /* Soft outer shadow on the app frame (light-mode friendly) */
+  .frame-shadow {
+    position: fixed; inset: 0; pointer-events: none; z-index: 9998;
+    box-shadow: inset 0 0 0 1px var(--line-strong), inset 0 0 60px -20px rgba(0,0,0,0.08);
+  }
+  :root.dark-on .frame-shadow { box-shadow: inset 0 0 0 1px var(--line-strong), inset 0 0 80px -20px rgba(0,0,0,0.5); }
+
+  /* ===========================================================
+     APP SHELL
+     =========================================================== */
+  #app {
+    display: grid;
+    grid-template-rows: 44px 36px 1fr 28px;
+    height: 100vh;
+  }
+
+  /* === TITLE BAR (with hex tabs) === */
+  .titlebar {
+    display: grid;
+    grid-template-columns: 200px 1fr 220px;
+    align-items: stretch;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--line);
+    position: relative;
+    z-index: 5;
+  }
+
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 14px;
+    border-right: 1px solid var(--line);
+  }
+  .brand-mark {
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    position: relative;
+  }
+  .brand-mark svg { width: 100%; height: 100%; color: var(--accent); }
+  .brand-mark .inner-spin { animation: spin var(--vortex-speed) linear infinite; transform-origin: center; }
+  .brand-mark .outer-spin { animation: spin-rev calc(var(--vortex-speed) * 1.7) linear infinite; transform-origin: center; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes spin-rev { to { transform: rotate(-360deg); } }
+
+  .brand-name {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 14px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-0);
+  }
+  .brand-name .ghost { color: var(--accent); font-weight: 400; }
+
+  /* Hex tabs */
+  .tabs {
+    display: flex;
+    align-items: flex-end;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding: 0 10px;
+    gap: -8px;
+    position: relative;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+
+  .hex-tab {
+    --hex-w: 140px;
+    --hex-h: 32px;
+    position: relative;
+    width: var(--hex-w);
+    height: var(--hex-h);
+    margin-right: -10px;
+    clip-path: polygon(12% 0, 88% 0, 100% 50%, 88% 100%, 12% 100%, 0 50%);
+    background: var(--bg-2);
+    display: flex; align-items: center; justify-content: flex-start;
+    padding: 0 22px 0 22px;
+    font-size: 11px;
+    color: var(--text-1);
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+    flex-shrink: 0;
+    overflow: hidden;
+    border: 0;
+  }
+  .hex-tab:hover { background: var(--bg-3); color: var(--text-0); padding-right: 34px; }
+  .hex-tab .tab-close {
+    position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+    width: 14px; height: 14px;
+    display: none; place-items: center;
+    color: var(--text-2);
+    font-size: 11px; line-height: 1;
+    border-radius: 2px;
+    z-index: 3;
+  }
+  .hex-tab:hover .tab-close { display: grid; }
+  .hex-tab.active .tab-close { display: grid; color: var(--accent); }
+  .hex-tab .tab-close:hover { background: var(--accent); color: var(--bg-0); }
+  .hex-tab.secure:hover::after { display: none; }
+  .hex-tab.active.secure::after { display: none; }
+  .hex-tab.active {
+    background: var(--bg-0);
+    color: var(--text-0);
+    z-index: 2;
+  }
+  .hex-tab.active::before {
+    content: '';
+    position: absolute; inset: 0;
+    clip-path: inherit;
+    background: linear-gradient(180deg, var(--accent-dim), transparent 40%);
+    pointer-events: none;
+  }
+  .hex-tab .tab-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--text-3);
+    margin-right: 8px;
+    flex-shrink: 0;
+  }
+  .hex-tab.active .tab-dot { background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+  .hex-tab .tab-title {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+  }
+  .hex-tab.secure::after {
+    content: '▲';
+    position: absolute; right: 18px; top: 50%; transform: translateY(-50%);
+    font-size: 7px; color: var(--accent);
+  }
+
+  .new-tab {
+    width: 32px; height: 32px; align-self: flex-end;
+    display: grid; place-items: center;
+    color: var(--text-2);
+    margin-left: 14px;
+    transition: color 120ms;
+  }
+  .new-tab:hover { color: var(--accent); }
+
+  .window-ctl {
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 14px;
+    justify-content: flex-end;
+    border-left: 1px solid var(--line);
+  }
+  .window-ctl .status {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10px;
+    color: var(--text-2);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .win-btns { display: flex; gap: 10px; }
+  .win-btns span {
+    width: 11px; height: 11px;
+    border: 1px solid var(--text-3);
+    display: block;
+  }
+  .win-btns span:hover { border-color: var(--accent); }
+  .win-btns .close { transform: rotate(45deg); border: none; position: relative; }
+  .win-btns .close::before, .win-btns .close::after {
+    content: ''; position: absolute; background: var(--text-3);
+  }
+  .win-btns .close::before { width: 11px; height: 1px; top: 5px; left: 0; }
+  .win-btns .close::after { width: 1px; height: 11px; top: 0; left: 5px; }
+
+  /* === ADDRESS BAR === */
+  .addressbar {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    padding: 0 14px;
+    gap: 10px;
+    background: var(--bg-0);
+    border-bottom: 1px solid var(--line);
+    font-size: 11px;
+  }
+  .nav-btns { display: flex; gap: 4px; }
+  .nav-btns button {
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    color: var(--text-2);
+    border-radius: 2px;
+  }
+  .nav-btns button:hover { color: var(--text-0); background: var(--bg-2); }
+
+  .url-input {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto;
+    align-items: center;
+    gap: 10px;
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    height: 24px;
+    padding: 0 10px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-0);
+    transition: border-color 120ms;
+  }
+  .url-input:focus-within { border-color: var(--accent); }
+  .url-protocol {
+    color: var(--accent);
+    font-size: 9px;
+    letter-spacing: 0.14em;
+  }
+  .url-input input {
+    background: none; border: none; outline: none;
+    color: inherit; font: inherit;
+    width: 100%;
+  }
+  .url-badges { display: flex; align-items: center; gap: 8px; }
+  .url-badge {
+    font-size: 9px;
+    padding: 2px 6px;
+    border: 1px solid var(--line-strong);
+    color: var(--text-1);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .url-badge.ok { color: var(--accent); border-color: var(--accent); }
+  .url-badge.warn { color: var(--warn); border-color: var(--warn); }
+
+  .right-rail-btns { display: flex; align-items: center; gap: 4px; }
+  .right-rail-btns button {
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    color: var(--text-2);
+    border-radius: 2px;
+    font-size: 10px;
+    position: relative;
+  }
+  .right-rail-btns button:hover { color: var(--accent); background: var(--bg-2); }
+  .right-rail-btns button.active { color: var(--accent); background: var(--bg-2); }
+  .right-rail-btns button[data-badge]::after {
+    content: attr(data-badge);
+    position: absolute; top: 0; right: 0;
+    font-size: 7px; color: var(--accent);
+    background: var(--bg-0); padding: 0 2px;
+    letter-spacing: 0;
+  }
+
+  /* === MAIN VIEWPORT === */
+  .viewport {
+    position: relative;
+    overflow: hidden;
+    background: var(--bg-0);
+  }
+
+  .screen {
+    position: absolute; inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 280ms ease;
+    overflow: auto;
+  }
+  .screen.active { opacity: 1; pointer-events: auto; }
+
+  /* === BOTTOM HUD === */
+  .hud {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    padding: 0 14px;
+    gap: 20px;
+    background: var(--bg-1);
+    border-top: 1px solid var(--line);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-2);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .hud-left, .hud-right { display: flex; align-items: center; gap: 16px; overflow: hidden; white-space: nowrap; }
+  .hud-right { justify-content: flex-end; }
+  .hud-center {
+    display: flex; align-items: center; gap: 10px;
+    color: var(--text-1);
+  }
+  .hud-metric { display: flex; align-items: center; gap: 6px; }
+  .hud-metric b { color: var(--text-0); font-weight: 500; }
+  .hud-metric .sym { color: var(--accent); }
+  .ticker {
+    display: flex; gap: 20px; animation: ticker 60s linear infinite;
+  }
+  @keyframes ticker {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+
+  /* ===========================================================
+     SCREEN: START / NEW TAB
+     =========================================================== */
+  .start {
+    display: grid;
+    grid-template-columns: 240px 1fr 280px;
+    height: 100%;
+    gap: 0;
+  }
+
+  .start-rail {
+    border-right: 1px solid var(--line);
+    padding: 20px 0;
+    display: flex; flex-direction: column; gap: 2px;
+    overflow-y: auto;
+  }
+  .rail-section {
+    font-size: 9px;
+    color: var(--text-3);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    padding: 14px 16px 8px;
+  }
+  .rail-item {
+    display: grid;
+    grid-template-columns: 20px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 16px;
+    color: var(--text-1);
+    font-size: 11px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    transition: all 120ms;
+  }
+  .rail-item:hover { background: var(--bg-1); color: var(--text-0); }
+  .rail-item.active {
+    border-left-color: var(--accent);
+    color: var(--text-0);
+    background: linear-gradient(90deg, var(--accent-dim), transparent 80%);
+  }
+  .rail-item .ico {
+    width: 14px; height: 14px;
+    border: 1px solid var(--text-3);
+    display: grid; place-items: center;
+    font-size: 8px;
+    color: var(--text-2);
+  }
+  .rail-item.active .ico { border-color: var(--accent); color: var(--accent); }
+  .rail-item .count {
+    font-size: 9px;
+    color: var(--text-3);
+    font-family: var(--font-mono);
+  }
+
+  .start-center {
+    position: relative;
+    overflow-y: auto;
+    padding: 40px 60px;
+  }
+
+  .vortex-bg {
+    position: absolute;
+    top: 50%; right: -140px; left: auto;
+    transform: translateY(-50%);
+    width: 620px; height: 620px;
+    pointer-events: none;
+    opacity: 0.12;
+    z-index: 0;
+    color: var(--text-2);
+    mask-image: radial-gradient(ellipse at center, black 40%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse at center, black 40%, transparent 75%);
+  }
+  :root.dark-on .vortex-bg { opacity: 0.35; color: var(--accent); }
+  .vortex-bg svg { width: 100%; height: 100%; }
+
+  .start-content { position: relative; z-index: 1; }
+
+  .start-header {
+    margin-bottom: 40px;
+  }
+  .start-kicker {
+    font-size: 10px;
+    color: var(--accent);
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .start-kicker::before {
+    content: '';
+    width: 24px; height: 1px; background: var(--accent);
+    display: inline-block;
+  }
+  .start-title {
+    font-family: var(--font-display);
+    font-weight: 300;
+    font-size: 64px;
+    line-height: 0.95;
+    letter-spacing: -0.03em;
+    margin: 0 0 18px;
+    color: var(--text-0);
+  }
+  .start-title b { font-weight: 500; color: var(--accent); font-style: italic; letter-spacing: -0.035em; }
+  .start-sub {
+    font-size: 12px;
+    color: var(--text-1);
+    max-width: 520px;
+    line-height: 1.6;
+  }
+
+  .start-search {
+    margin: 48px 0 40px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 16px;
+    padding: 16px 20px;
+    background: var(--bg-1);
+    border: 1px solid var(--line-strong);
+    position: relative;
+  }
+  .start-search::before, .start-search::after {
+    content: ''; position: absolute;
+    width: 8px; height: 8px;
+    border: 1px solid var(--accent);
+  }
+  .start-search::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+  .start-search::after { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+  .start-search .prompt {
+    color: var(--accent); font-size: 12px; letter-spacing: 0.1em;
+  }
+  .start-search input {
+    background: none; border: none; outline: none;
+    color: var(--text-0); font-family: var(--font-mono); font-size: 14px;
+    width: 100%;
+  }
+  .start-search .hint {
+    font-size: 9px; color: var(--text-3); letter-spacing: 0.15em;
+    text-transform: uppercase;
+    display: flex; gap: 8px;
+  }
+  .start-search .hint kbd {
+    font-family: var(--font-mono);
+    border: 1px solid var(--line-strong);
+    padding: 2px 5px;
+    font-size: 9px;
+    color: var(--text-1);
+  }
+
+  .speed-dial {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 2px;
+    margin-bottom: 40px;
+  }
+  .dial-card {
+    aspect-ratio: 1.3;
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    padding: 14px;
+    display: flex; flex-direction: column;
+    justify-content: space-between;
+    cursor: pointer;
+    transition: all 200ms;
+    position: relative;
+    overflow: hidden;
+  }
+  .dial-card:hover {
+    background: var(--bg-2);
+    border-color: var(--accent);
+    transform: translateY(-1px);
+  }
+  .dial-card:hover::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(circle at top right, var(--accent-dim), transparent 70%);
+    pointer-events: none;
+  }
+  .dial-card .dial-host {
+    font-size: 9px; color: var(--text-3); letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .dial-card .dial-title {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 15px;
+    color: var(--text-0);
+    line-height: 1.15;
+  }
+  .dial-card .dial-meta {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 9px; color: var(--text-2);
+  }
+  .dial-card .dial-meta .lat { color: var(--accent); }
+
+  /* GitHub connect tile */
+  .dial-card.dial-connect {
+    background: linear-gradient(135deg, var(--accent-dim), transparent 80%), var(--bg-1);
+    border-color: var(--accent);
+    position: relative;
+  }
+  .dial-card.dial-connect .dial-host { color: var(--accent); font-weight: 500; }
+  .dial-card.dial-connect .dial-title { color: var(--text-0); }
+  .dial-card.dial-connect .connect-cta {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    letter-spacing: 0.16em;
+    font-size: 9px;
+  }
+  .dial-card.dial-connect::after {
+    content: ''; position: absolute;
+    top: 10px; right: 10px;
+    width: 14px; height: 14px;
+    background: no-repeat center / contain;
+  }
+  .dial-card.dial-connect[data-connect="github"]::after {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ff3864' stroke-width='1.5'><path d='M12 2a10 10 0 0 0-3.16 19.49c.5.09.68-.22.68-.48v-1.7c-2.78.6-3.37-1.34-3.37-1.34-.45-1.16-1.11-1.47-1.11-1.47-.91-.62.07-.6.07-.6 1 .07 1.53 1.03 1.53 1.03.89 1.53 2.34 1.09 2.91.83.09-.65.35-1.09.63-1.34-2.22-.25-4.56-1.11-4.56-4.94 0-1.09.39-1.98 1.03-2.68-.1-.25-.45-1.27.1-2.64 0 0 .84-.27 2.75 1.02a9.56 9.56 0 0 1 5 0c1.91-1.29 2.75-1.02 2.75-1.02.55 1.37.2 2.39.1 2.64.64.7 1.03 1.59 1.03 2.68 0 3.84-2.34 4.69-4.57 4.93.36.31.68.92.68 1.85v2.74c0 .27.18.58.69.48A10 10 0 0 0 12 2z'/></svg>");
+  }
+  .dial-card.dial-connect[data-connect="google"]::after {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ff3864'><circle cx='6' cy='6' r='2.2'/><circle cx='18' cy='6' r='2.2'/><circle cx='6' cy='18' r='2.2'/><circle cx='18' cy='18' r='2.2'/><circle cx='12' cy='12' r='2.2' fill='none' stroke='%23ff3864' stroke-width='1.4'/></svg>");
+  }
+  .dial-card.dial-connect[data-connect="metamask"]::after {
+    /* Monochrome fox-silhouette glyph */
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ff3864' stroke-width='1.4' stroke-linejoin='round'><path d='M3 5l5 2 1 3h6l1-3 5-2-2 6 1 3-3 2 1 3-4-1-3 1-3-1-4 1 1-3-3-2 1-3z'/><circle cx='9' cy='11' r='.6' fill='%23ff3864'/><circle cx='15' cy='11' r='.6' fill='%23ff3864'/></svg>");
+  }
+  .dial-card.dial-connect:hover { transform: translateY(-2px); box-shadow: 0 8px 24px var(--accent-glow); }
+
+  /* Context folder tile */
+  .dial-card.dial-context {
+    background:
+      repeating-linear-gradient(135deg, transparent 0 6px, rgba(255,56,100,0.03) 6px 7px),
+      var(--bg-1);
+    position: relative; overflow: visible;
+    padding-bottom: 22px;
+  }
+  .dial-card.dial-context .dial-host { color: var(--accent); }
+  .dial-card.dial-context .ctx-sub {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-2);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-top: 4px;
+    font-style: normal;
+  }
+  .dial-card.dial-context .ctx-count b { color: var(--text-0); }
+  .dial-card.dial-context .ctx-export { color: var(--accent); }
+  /* Folder tab + paper stack decoration */
+  .dial-card.dial-context::before {
+    content: ''; position: absolute;
+    top: -1px; right: 18px;
+    width: 38px; height: 6px;
+    background: var(--accent);
+    clip-path: polygon(0 100%, 8% 0, 92% 0, 100% 100%);
+  }
+  .dial-card.dial-context .ctx-stack {
+    position: absolute;
+    left: 12px; right: 12px; bottom: 6px;
+    height: 6px; pointer-events: none;
+  }
+  .dial-card.dial-context .ctx-stack span {
+    position: absolute; left: 0; right: 0;
+    border-top: 1px solid var(--line-strong);
+    height: 0;
+  }
+  .dial-card.dial-context .ctx-stack span:nth-child(1) { bottom: 0; opacity: 1; }
+  .dial-card.dial-context .ctx-stack span:nth-child(2) { bottom: 3px; left: 6px; right: 6px; opacity: 0.6; }
+  .dial-card.dial-context .ctx-stack span:nth-child(3) { bottom: 6px; left: 12px; right: 12px; opacity: 0.3; }
+  .dial-card.dial-context:hover { transform: translateY(-2px); box-shadow: 0 8px 24px var(--accent-glow); }
+
+  /* Context drawer */
+  .ctx-drawer {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(6px);
+    display: none; place-items: center;
+  }
+  .ctx-drawer.open { display: grid; }
+  .ctx-panel {
+    width: min(720px, 94%);
+    max-height: 82vh;
+    background: var(--bg-0);
+    border: 1px solid var(--line-strong);
+    box-shadow: 0 30px 80px #000c, 0 0 0 1px var(--accent-dim);
+    position: relative;
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    font-family: var(--font-display);
+    font-weight: 300;
+  }
+  .ctx-panel::before, .ctx-panel::after {
+    content: ''; position: absolute; width: 10px; height: 10px; border: 1px solid var(--accent);
+  }
+  .ctx-panel::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+  .ctx-panel::after { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+  .ctx-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 20px 24px 8px;
+    font-family: var(--font-mono);
+    font-size: 9px;
+    letter-spacing: 0.26em;
+    color: var(--text-3);
+    text-transform: uppercase;
+    border-bottom: 1px solid var(--line);
+  }
+  .ctx-head b { color: var(--accent); letter-spacing: 0.26em; }
+  .ctx-title-row {
+    display: flex; align-items: flex-end; justify-content: space-between;
+    padding: 14px 24px 18px;
+    border-bottom: 1px solid var(--line);
+  }
+  .ctx-title {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 24px;
+    color: var(--text-0);
+    margin: 0;
+  }
+  .ctx-title i { color: var(--accent); font-style: italic; font-weight: 500; }
+  .ctx-kpis { display: flex; gap: 20px; font-family: var(--font-mono); font-size: 10px; color: var(--text-2); }
+  .ctx-kpis b { color: var(--text-0); font-weight: 500; }
+  .ctx-list {
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  .ctx-row {
+    display: grid;
+    grid-template-columns: 24px 1fr auto auto auto;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 24px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 13px;
+    color: var(--text-1);
+  }
+  .ctx-row:hover { background: rgba(255,56,100,0.04); }
+  .ctx-row .ctx-ico {
+    width: 20px; height: 20px;
+    border: 1px solid var(--line-strong);
+    display: grid; place-items: center;
+    color: var(--accent); font-size: 10px;
+    font-family: var(--font-mono);
+  }
+  .ctx-row .ctx-name { color: var(--text-0); font-weight: 400; }
+  .ctx-row .ctx-host { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); letter-spacing: 0.04em; }
+  .ctx-row .ctx-tokens { font-family: var(--font-mono); font-size: 10px; color: var(--text-2); }
+  .ctx-row .ctx-tokens b { color: var(--text-1); }
+  .ctx-row .ctx-tag {
+    font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.14em;
+    text-transform: uppercase;
+    border: 1px solid var(--line-strong); padding: 2px 6px;
+    color: var(--text-2);
+  }
+  .ctx-row .ctx-tag.accent { border-color: var(--accent); color: var(--accent); }
+  .ctx-foot {
+    display: flex; gap: 10px; justify-content: space-between; align-items: center;
+    padding: 14px 20px;
+    border-top: 1px solid var(--line);
+    background: var(--bg-1);
+  }
+  .ctx-foot .ctx-stat {
+    font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--text-3);
+  }
+  .ctx-foot .ctx-stat b { color: var(--text-0); }
+  .ctx-foot .ctx-actions { display: flex; gap: 8px; }
+  .ctx-btn {
+    border: 1px solid var(--line-strong);
+    padding: 9px 14px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-1);
+    background: none;
+    cursor: pointer;
+  }
+  .ctx-btn:hover { color: var(--text-0); border-color: var(--text-2); }
+  .ctx-btn.primary { background: var(--accent); color: var(--bg-0); border-color: var(--accent); font-weight: 500; }
+
+  /* Address bar "Save to context" button */
+  .addr-ctx-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 0 10px; height: 22px;
+    border: 1px solid var(--line-strong);
+    color: var(--text-2);
+    font-family: var(--font-mono); font-size: 9px;
+    letter-spacing: 0.18em; text-transform: uppercase;
+    background: none; cursor: pointer;
+    transition: all 150ms;
+  }
+  .addr-ctx-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .addr-ctx-btn.saved { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+  .addr-ctx-btn .plus { font-size: 12px; line-height: 1; }
+
+  /* Guide tile */
+  .dial-card.dial-guide {
+    background:
+      linear-gradient(180deg, transparent 0 calc(100% - 2px), var(--accent) calc(100% - 2px) 100%),
+      repeating-linear-gradient(0deg, transparent 0 14px, rgba(255,255,255,0.025) 14px 15px),
+      var(--bg-1);
+    position: relative;
+  }
+  .dial-card.dial-guide .dial-host { color: var(--accent); }
+  .dial-card.dial-guide .dial-title { font-style: italic; }
+  .dial-card.dial-guide .dial-meta b { color: var(--text-0); }
+  .dial-card.dial-guide .lat { color: var(--accent); }
+  .dial-card.dial-guide::before {
+    content: ''; position: absolute;
+    top: 12px; right: 12px;
+    width: 16px; height: 14px;
+    /* Open-book glyph */
+    background: no-repeat center / contain;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 20' fill='none' stroke='%23ff3864' stroke-width='1.4' stroke-linejoin='round'><path d='M2 3h7a3 3 0 0 1 3 3v11a2 2 0 0 0-2-2H2zM22 3h-7a3 3 0 0 0-3 3v11a2 2 0 0 1 2-2h8zM5 7h4M5 10h4M15 7h4M15 10h4'/></svg>");
+  }
+  .dial-card.dial-guide:hover { transform: translateY(-2px); box-shadow: 0 8px 24px var(--accent-glow); }
+
+  /* Guide drawer — reuses ctx-drawer overlay chrome */
+  .guide-panel {
+    width: min(880px, 96%);
+    max-height: 86vh;
+    background: var(--bg-0);
+    border: 1px solid var(--line-strong);
+    box-shadow: 0 30px 80px #000c, 0 0 0 1px var(--accent-dim);
+    position: relative;
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    grid-template-rows: auto 1fr auto;
+    grid-template-areas: "head head" "toc body" "foot foot";
+    font-family: var(--font-display);
+  }
+  .guide-panel::before, .guide-panel::after {
+    content: ''; position: absolute; width: 10px; height: 10px; border: 1px solid var(--accent);
+  }
+  .guide-panel::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+  .guide-panel::after { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+  .guide-head {
+    grid-area: head;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 18px 22px 16px;
+    border-bottom: 1px solid var(--line);
+    font-family: var(--font-mono);
+    font-size: 9px; letter-spacing: 0.26em; color: var(--text-3); text-transform: uppercase;
+  }
+  .guide-head .gh-title {
+    font-family: var(--font-display); font-weight: 400; font-size: 20px;
+    color: var(--text-0); letter-spacing: -0.01em; text-transform: none;
+  }
+  .guide-head .gh-title i { color: var(--accent); font-style: italic; font-weight: 500; }
+  .guide-toc {
+    grid-area: toc;
+    border-right: 1px solid var(--line);
+    padding: 10px 0; overflow-y: auto;
+    max-height: calc(86vh - 160px);
+  }
+  .guide-toc-section {
+    padding: 10px 18px 4px;
+    font-family: var(--font-mono); font-size: 9px;
+    color: var(--text-3); letter-spacing: 0.22em; text-transform: uppercase;
+  }
+  .guide-toc-item {
+    display: flex; justify-content: space-between; gap: 10px;
+    padding: 7px 18px;
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--text-1); cursor: pointer;
+    border-left: 2px solid transparent;
+  }
+  .guide-toc-item:hover { color: var(--text-0); background: rgba(255,56,100,0.04); }
+  .guide-toc-item.active { color: var(--accent); border-left-color: var(--accent); background: var(--accent-dim); }
+  .guide-toc-item .no { color: var(--text-3); }
+  .guide-toc-item.active .no { color: var(--accent); }
+  .guide-body {
+    grid-area: body;
+    overflow-y: auto; max-height: calc(86vh - 160px);
+    padding: 26px 34px;
+    color: var(--text-1);
+    font-weight: 300; line-height: 1.6;
+  }
+  .guide-body .kicker {
+    font-family: var(--font-mono); font-size: 9px; color: var(--accent);
+    letter-spacing: 0.26em; text-transform: uppercase; margin-bottom: 8px;
+  }
+  .guide-body h3 {
+    font-family: var(--font-display); font-weight: 400; font-size: 28px;
+    color: var(--text-0); letter-spacing: -0.01em;
+    margin: 0 0 4px;
+  }
+  .guide-body h3 i { color: var(--accent); font-style: italic; font-weight: 500; }
+  .guide-body .deck {
+    font-family: var(--font-display); font-weight: 300; font-size: 14px;
+    color: var(--text-2); margin-bottom: 20px;
+    padding-bottom: 16px; border-bottom: 1px solid var(--line);
+  }
+  .guide-body p { font-size: 13px; margin: 0 0 14px; }
+  .guide-body .pull {
+    border-left: 2px solid var(--accent);
+    padding: 6px 0 6px 14px;
+    font-family: var(--font-display); font-weight: 300; font-style: italic;
+    font-size: 15px; color: var(--text-0);
+    margin: 18px 0;
+  }
+  .guide-body ul { list-style: none; padding: 0; margin: 10px 0 18px; font-size: 12px; }
+  .guide-body ul li { padding: 6px 0 6px 18px; position: relative; color: var(--text-1); }
+  .guide-body ul li::before {
+    content: '◇'; position: absolute; left: 0; top: 6px;
+    color: var(--accent); font-size: 9px;
+  }
+  .guide-body .meta-row {
+    display: flex; gap: 16px;
+    font-family: var(--font-mono); font-size: 9px;
+    letter-spacing: 0.18em; text-transform: uppercase; color: var(--text-3);
+    margin-bottom: 20px;
+  }
+  .guide-body .meta-row b { color: var(--text-1); }
+  .guide-foot {
+    grid-area: foot;
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 22px;
+    border-top: 1px solid var(--line);
+    background: var(--bg-1);
+    font-family: var(--font-mono); font-size: 9px;
+    color: var(--text-3); letter-spacing: 0.18em; text-transform: uppercase;
+  }
+
+  /* OAuth modal */
+  .oauth-overlay {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(6px);
+    display: none; place-items: center;
+  }
+  .oauth-overlay.open { display: grid; }
+  .oauth-card {
+    width: min(440px, 92%);
+    background: var(--bg-0);
+    border: 1px solid var(--line-strong);
+    box-shadow: 0 30px 80px #000000cc, 0 0 0 1px var(--accent-dim);
+    position: relative;
+    padding: 28px 28px 22px;
+    font-family: var(--font-mono);
+  }
+  .oauth-card::before, .oauth-card::after {
+    content: ''; position: absolute; width: 10px; height: 10px;
+    border: 1px solid var(--accent);
+  }
+  .oauth-card::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+  .oauth-card::after { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+  .oauth-kicker {
+    font-size: 9px; color: var(--accent);
+    letter-spacing: 0.26em; text-transform: uppercase;
+    display: flex; justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .oauth-title {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    color: var(--text-0);
+    margin: 0 0 6px;
+  }
+  .oauth-title b { color: var(--accent); font-weight: 500; font-style: italic; }
+  .oauth-sub {
+    font-size: 11px; color: var(--text-1);
+    line-height: 1.55;
+    margin-bottom: 20px;
+    font-family: var(--font-display);
+    font-weight: 300;
+  }
+  .oauth-scopes {
+    border: 1px solid var(--line);
+    padding: 10px 12px;
+    margin-bottom: 18px;
+    font-size: 10px;
+    color: var(--text-1);
+  }
+  .oauth-scopes .sh {
+    font-size: 9px; color: var(--text-3);
+    letter-spacing: 0.18em; text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .oauth-scopes .row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 3px 0;
+  }
+  .oauth-scopes .row::before { content: '◇'; color: var(--accent); font-size: 9px; }
+  .oauth-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .oauth-btn {
+    border: 1px solid var(--line-strong);
+    padding: 10px 14px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-1);
+    cursor: pointer;
+    background: none;
+    transition: all 150ms;
+  }
+  .oauth-btn:hover { color: var(--text-0); border-color: var(--text-2); }
+  .oauth-btn.primary {
+    background: var(--accent);
+    color: var(--bg-0);
+    border-color: var(--accent);
+    font-weight: 500;
+  }
+  .oauth-btn.primary:hover { color: var(--bg-0); opacity: 0.9; }
+  .oauth-footnote {
+    margin-top: 14px;
+    font-size: 9px;
+    color: var(--text-3);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    text-align: center;
+  }
+
+  .start-right {
+    border-left: 1px solid var(--line);
+    padding: 20px;
+    overflow-y: auto;
+    display: flex; flex-direction: column; gap: 24px;
+  }
+
+  .panel-h {
+    font-size: 9px;
+    color: var(--text-3);
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .panel-h .live {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    display: flex; align-items: center; gap: 4px;
+  }
+  .panel-h .live::before {
+    content: '●'; font-size: 8px;
+    animation: pulse 1.5s infinite;
+  }
+
+  .sys-stat {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px dashed var(--line);
+    font-size: 11px;
+  }
+  .sys-stat:last-child { border-bottom: none; }
+  .sys-stat .label { color: var(--text-1); }
+  .sys-stat .val { color: var(--text-0); font-family: var(--font-mono); }
+  .sys-stat .val b { color: var(--accent); font-weight: 500; }
+
+  .bar {
+    height: 2px; background: var(--bg-2); margin-top: 4px;
+    position: relative;
+  }
+  .bar > i {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: var(--accent);
+    display: block;
+  }
+  .bar.warn > i { background: var(--warn); }
+  .bar.danger > i { background: var(--danger); }
+
+  .threat-list {
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .threat-item {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 10px;
+    padding: 7px 0;
+    font-size: 10px;
+    border-bottom: 1px solid var(--line);
+    align-items: center;
+  }
+  .threat-item:last-child { border-bottom: none; }
+  .threat-item .tcode {
+    width: 20px; text-align: center;
+    color: var(--danger); font-size: 9px;
+  }
+  .threat-item .tcode.blocked { color: var(--accent); }
+  .threat-item .thost {
+    color: var(--text-1);
+    font-family: var(--font-mono);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .threat-item .tcount {
+    color: var(--text-2); font-family: var(--font-mono);
+    font-size: 10px;
+  }
+
+  /* ===========================================================
+     SCREEN: BROWSING + THREAT RADAR
+     =========================================================== */
+  .browsing {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    height: 100%;
+  }
+  .page-viewport {
+    overflow-y: auto;
+    padding: 0;
+    background: var(--bg-0);
+    position: relative;
+  }
+  /* Fake news article */
+  .page-header {
+    padding: 60px 80px 30px;
+    border-bottom: 1px solid var(--line);
+    position: relative;
+  }
+  .page-header .page-kicker {
+    font-size: 10px; color: var(--accent);
+    letter-spacing: 0.24em; text-transform: uppercase;
+    margin-bottom: 18px;
+  }
+  .page-header h1 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    font-size: 42px;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    color: var(--text-0);
+    margin: 0 0 18px;
+    max-width: 700px;
+  }
+  .page-header .byline {
+    font-size: 11px; color: var(--text-2);
+    display: flex; gap: 16px;
+    font-family: var(--font-mono);
+  }
+  .page-body {
+    padding: 30px 80px 60px;
+    max-width: 760px;
+  }
+  .page-body p {
+    font-family: var(--font-display);
+    font-weight: 300;
+    font-size: 15px;
+    line-height: 1.75;
+    color: var(--text-1);
+    margin: 0 0 20px;
+  }
+  .page-body p:first-of-type::first-letter {
+    font-family: var(--font-display);
+    font-weight: 500;
+    font-size: 56px;
+    float: left;
+    line-height: 0.88;
+    padding: 6px 12px 0 0;
+    color: var(--accent);
+  }
+  .page-placeholder {
+    height: 280px;
+    background:
+      repeating-linear-gradient(45deg,
+        var(--bg-1) 0, var(--bg-1) 8px,
+        var(--bg-2) 8px, var(--bg-2) 16px);
+    border: 1px solid var(--line);
+    display: grid; place-items: center;
+    color: var(--text-3); font-size: 10px;
+    letter-spacing: 0.2em; text-transform: uppercase;
+    margin: 10px 0 30px;
+  }
+
+  /* Threat radar sidebar */
+  .radar {
+    border-left: 1px solid var(--line);
+    background: var(--bg-1);
+    overflow-y: auto;
+    display: flex; flex-direction: column;
+  }
+  .radar-header {
+    padding: 18px 20px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .radar-title {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 10px; color: var(--text-3);
+    letter-spacing: 0.22em; text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  .radar-title .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 8px var(--accent);
+    animation: pulse 1.5s infinite;
+  }
+  .radar-score {
+    display: flex; align-items: baseline; gap: 10px;
+    margin-bottom: 8px;
+  }
+  .radar-score b {
+    font-family: var(--font-display);
+    font-weight: 300;
+    font-size: 56px;
+    color: var(--accent);
+    line-height: 0.9;
+    letter-spacing: -0.03em;
+  }
+  .radar-score .grade {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-1);
+    letter-spacing: 0.15em;
+  }
+  .radar-summary {
+    font-size: 10px; color: var(--text-1);
+    line-height: 1.6;
+  }
+
+  .radar-scope {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-bottom: 1px solid var(--line);
+  }
+  .radar-scope > div {
+    padding: 12px 20px;
+    font-size: 10px;
+    border-right: 1px solid var(--line);
+  }
+  .radar-scope > div:last-child { border-right: none; }
+  .radar-scope .label {
+    color: var(--text-3); letter-spacing: 0.16em;
+    text-transform: uppercase; font-size: 9px;
+    margin-bottom: 4px;
+  }
+  .radar-scope .val {
+    font-family: var(--font-display);
+    font-size: 20px; font-weight: 400;
+    color: var(--text-0);
+  }
+  .radar-scope .val.ok { color: var(--accent); }
+
+  .radar-section { padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  .radar-item {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 12px;
+    align-items: center;
+    padding: 8px 0;
+    font-size: 11px;
+  }
+  .radar-item .ico {
+    width: 16px; height: 16px;
+    display: grid; place-items: center;
+    font-size: 9px;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+  }
+  .radar-item .ico.block { color: var(--danger); border-color: var(--danger); }
+  .radar-item .host {
+    color: var(--text-0);
+    font-family: var(--font-mono);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .radar-item .host .sub { color: var(--text-3); font-size: 9px; display: block; margin-top: 1px; }
+  .radar-item .count {
+    color: var(--text-2); font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .radar-item .count.bad { color: var(--danger); }
+
+  .identity-card {
+    margin: 16px 20px;
+    padding: 14px;
+    border: 1px solid var(--line-strong);
+    background: var(--bg-0);
+  }
+  .identity-row {
+    display: flex; justify-content: space-between;
+    padding: 5px 0;
+    font-size: 10px;
+    color: var(--text-1);
+    border-bottom: 1px dashed var(--line);
+  }
+  .identity-row:last-child { border-bottom: none; }
+  .identity-row b { color: var(--accent); font-family: var(--font-mono); font-weight: 400; }
+
+  .vpn-flags {
+    padding: 14px 20px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .vpn-flag {
+    display: grid;
+    grid-template-columns: 14px 1fr auto auto;
+    gap: 10px; align-items: center;
+    padding: 6px 0;
+    font-size: 10px;
+    cursor: pointer;
+    color: var(--text-1);
+    border-left: 2px solid transparent;
+    padding-left: 8px;
+  }
+  .vpn-flag:hover { background: var(--bg-2); color: var(--text-0); }
+  .vpn-flag.active {
+    border-left-color: var(--accent);
+    color: var(--text-0);
+    background: linear-gradient(90deg, var(--accent-dim), transparent);
+  }
+  .vpn-flag .flag-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--text-3);
+  }
+  .vpn-flag.active .flag-dot { background: var(--accent); box-shadow: 0 0 6px var(--accent-glow); }
+  .vpn-flag .ms { color: var(--text-2); font-family: var(--font-mono); font-size: 9px; }
+
+  /* ===========================================================
+     SCREEN: TAB GRAPH
+     =========================================================== */
+  .graph {
+    position: relative;
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background:
+      radial-gradient(ellipse at top, var(--bg-1), var(--bg-0) 70%),
+      var(--bg-0);
+  }
+  .graph-svg {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+  }
+  .graph-node {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    width: 150px;
+    cursor: pointer;
+    transition: all 200ms;
+  }
+  .graph-node:hover { z-index: 10; }
+  .graph-node:hover .nh { border-color: var(--accent); }
+  .graph-node .nh {
+    background: var(--bg-1);
+    border: 1px solid var(--line-strong);
+    padding: 10px 12px;
+    font-size: 10px;
+    position: relative;
+  }
+  .graph-node.active .nh {
+    border-color: var(--accent);
+    background: var(--bg-2);
+    box-shadow: 0 0 20px var(--accent-glow);
+  }
+  .graph-node .host {
+    font-size: 8px; color: var(--text-3);
+    letter-spacing: 0.14em; text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .graph-node .title {
+    font-family: var(--font-display);
+    font-weight: 500; font-size: 11px;
+    color: var(--text-0);
+    line-height: 1.25;
+  }
+  .graph-node.root .host { color: var(--accent); }
+  .graph-node .pin {
+    position: absolute;
+    left: -4px; top: -4px;
+    width: 8px; height: 8px;
+    background: var(--accent);
+    border: 1px solid var(--bg-0);
+  }
+
+  .graph-legend {
+    position: absolute;
+    left: 20px; top: 20px;
+    padding: 12px 14px;
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    font-size: 9px;
+    color: var(--text-2);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    display: flex; flex-direction: column; gap: 4px;
+    max-width: 280px;
+  }
+  .graph-legend h4 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    margin: 0 0 8px;
+    color: var(--text-0);
+    font-size: 13px;
+    letter-spacing: -0.01em;
+    text-transform: none;
+  }
+  .graph-legend p { margin: 0; line-height: 1.5; text-transform: none; letter-spacing: 0.03em; color: var(--text-1); font-size: 10px; }
+  .graph-stats {
+    position: absolute;
+    right: 20px; bottom: 40px;
+    padding: 12px 14px;
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    font-size: 9px;
+    color: var(--text-2);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    display: grid; grid-template-columns: auto auto; gap: 4px 20px;
+  }
+  .graph-stats b { color: var(--accent); font-family: var(--font-mono); }
+
+  /* ===========================================================
+     SCREEN: COMMAND PALETTE (overlay)
+     =========================================================== */
+  .cmd-overlay {
+    position: absolute; inset: 0;
+    background: #00000080;
+    backdrop-filter: blur(4px);
+    display: grid; place-items: start center;
+    padding-top: 80px;
+    z-index: 20;
+  }
+  .cmd {
+    width: min(640px, 90%);
+    background: var(--bg-1);
+    border: 1px solid var(--line-strong);
+    box-shadow: 0 30px 80px #000000cc, 0 0 0 1px var(--accent-dim);
+    position: relative;
+  }
+  .cmd::before, .cmd::after {
+    content: ''; position: absolute;
+    width: 10px; height: 10px;
+    border: 1px solid var(--accent);
+  }
+  .cmd::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+  .cmd::after { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+
+  .cmd-input {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    padding: 16px 20px;
+    gap: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .cmd-input .prompt {
+    color: var(--accent);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    letter-spacing: 0.15em;
+  }
+  .cmd-input input {
+    background: none; border: none; outline: none;
+    color: var(--text-0);
+    font-family: var(--font-mono);
+    font-size: 14px;
+    width: 100%;
+  }
+  .cmd-input .esc {
+    font-size: 9px; color: var(--text-3);
+    letter-spacing: 0.16em; text-transform: uppercase;
+  }
+  .cmd-list { max-height: 400px; overflow-y: auto; }
+  .cmd-group {
+    font-size: 9px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    padding: 12px 20px 6px;
+  }
+  .cmd-item {
+    display: grid;
+    grid-template-columns: 20px 1fr auto;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text-1);
+    border-left: 2px solid transparent;
+  }
+  .cmd-item:hover, .cmd-item.sel {
+    background: var(--bg-2);
+    color: var(--text-0);
+    border-left-color: var(--accent);
+  }
+  .cmd-item .ico {
+    color: var(--accent);
+    font-size: 10px;
+    font-family: var(--font-mono);
+  }
+  .cmd-item .kbd {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    color: var(--text-3);
+    letter-spacing: 0.1em;
+    border: 1px solid var(--line-strong);
+    padding: 2px 6px;
+  }
+  .cmd-item .name b { color: var(--accent); font-weight: 500; }
+  .cmd-item .desc { font-size: 10px; color: var(--text-3); margin-top: 2px; }
+
+  /* ===========================================================
+     SCREEN: SPLIT VIEW
+     =========================================================== */
+  .split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 1fr 1fr;
+    height: 100%;
+    gap: 1px;
+    background: var(--line);
+  }
+  .split-pane {
+    background: var(--bg-0);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+  .split-pane.focused { box-shadow: inset 0 0 0 1px var(--accent); }
+  .pane-header {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg-1);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-2);
+  }
+  .pane-header .pdot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--text-3);
+  }
+  .split-pane.focused .pane-header .pdot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .pane-header .purl { color: var(--text-0); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pane-header .pctl { display: flex; gap: 6px; }
+  .pane-header .pctl button { color: var(--text-3); font-size: 10px; }
+  .pane-header .pctl button:hover { color: var(--accent); }
+  .pane-body {
+    flex: 1; overflow: auto; padding: 20px;
+    font-size: 11px; line-height: 1.6; color: var(--text-1);
+  }
+  .pane-body h3 {
+    font-family: var(--font-display); font-weight: 500;
+    color: var(--text-0); font-size: 16px;
+    margin: 0 0 12px; letter-spacing: -0.01em;
+  }
+
+  .mock-row { display: grid; grid-template-columns: 80px 1fr auto; gap: 12px; padding: 6px 0; border-bottom: 1px dashed var(--line); font-size: 10px; }
+  .mock-row:last-child { border: none; }
+  .mock-row .k { color: var(--text-3); font-family: var(--font-mono); }
+  .mock-row .v { color: var(--text-0); }
+  .mock-row .n { color: var(--accent); font-family: var(--font-mono); }
+
+  .chart {
+    height: 140px;
+    background:
+      linear-gradient(to top, var(--accent-dim), transparent),
+      linear-gradient(to right, var(--line) 1px, transparent 1px) 0 0 / 10% 100%,
+      linear-gradient(to top, var(--line) 1px, transparent 1px) 0 0 / 100% 25%;
+    position: relative;
+    border-bottom: 1px solid var(--accent);
+    margin: 16px 0;
+  }
+  .chart::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent 0, transparent 50%, var(--accent) 50%, var(--accent) 51%, transparent 51%);
+    clip-path: polygon(0 80%, 8% 70%, 16% 75%, 24% 55%, 32% 60%, 40% 40%, 48% 45%, 56% 30%, 64% 35%, 72% 20%, 80% 25%, 88% 10%, 100% 15%, 100% 100%, 0 100%);
+    background: linear-gradient(to top, var(--accent-dim), transparent);
+    border-top: 1px solid var(--accent);
+  }
+
+  /* ===========================================================
+     SCREEN: AI CO-PILOT
+     =========================================================== */
+  .copilot {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    height: 100%;
+  }
+  .copilot-side {
+    border-left: 1px solid var(--line);
+    background: var(--bg-1);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .copilot-hdr {
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .copilot-hdr h3 {
+    font-family: var(--font-display);
+    font-weight: 500;
+    margin: 0;
+    font-size: 14px;
+    letter-spacing: -0.01em;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .copilot-hdr h3 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  .copilot-hdr .model {
+    font-size: 9px; color: var(--text-3); letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+  .copilot-msgs {
+    flex: 1; overflow-y: auto;
+    padding: 16px 18px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .msg {
+    font-size: 12px; line-height: 1.6;
+  }
+  .msg .who {
+    font-size: 9px; color: var(--text-3);
+    letter-spacing: 0.2em; text-transform: uppercase;
+    margin-bottom: 6px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .msg.user .who { color: var(--accent); }
+  .msg .who::before {
+    content: '>';
+    font-family: var(--font-mono);
+  }
+  .msg .bubble {
+    color: var(--text-1);
+    font-family: var(--font-display);
+    font-weight: 300;
+  }
+  .msg.user .bubble { color: var(--text-0); }
+  .msg .bubble b { color: var(--accent); font-weight: 500; }
+  .msg .ref {
+    margin-top: 8px;
+    display: flex; gap: 6px; flex-wrap: wrap;
+  }
+  .msg .ref a {
+    font-size: 9px; color: var(--text-2);
+    border: 1px solid var(--line-strong);
+    padding: 2px 6px;
+    text-decoration: none;
+    font-family: var(--font-mono);
+    letter-spacing: 0.08em;
+  }
+  .copilot-actions {
+    padding: 12px 18px;
+    border-top: 1px solid var(--line);
+    display: flex; gap: 6px; flex-wrap: wrap;
+  }
+  .copilot-actions .chip {
+    font-size: 10px;
+    padding: 5px 10px;
+    border: 1px solid var(--line-strong);
+    color: var(--text-1);
+    cursor: pointer;
+    letter-spacing: 0.04em;
+  }
+  .copilot-actions .chip:hover { border-color: var(--accent); color: var(--accent); }
+  .copilot-input {
+    padding: 12px 18px 16px;
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 10px; align-items: center;
+    border-top: 1px solid var(--line);
+  }
+  .copilot-input .pr { color: var(--accent); font-size: 11px; }
+  .copilot-input input {
+    background: var(--bg-0);
+    border: 1px solid var(--line-strong);
+    padding: 8px 10px;
+    color: var(--text-0);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    outline: none;
+  }
+  .copilot-input input:focus { border-color: var(--accent); }
+  .copilot-input .send {
+    color: var(--accent); font-family: var(--font-mono);
+    font-size: 9px; letter-spacing: 0.15em;
+    border: 1px solid var(--accent);
+    padding: 8px 12px;
+  }
+
+  /* ===========================================================
+     SCREEN: RESOURCE GOVERNOR + VAULTS
+     =========================================================== */
+  .gov {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    height: 100%;
+    overflow: hidden;
+  }
+  .gov-main {
+    padding: 30px 40px; overflow-y: auto;
+  }
+  .gov-hdr {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    margin-bottom: 28px; padding-bottom: 20px;
+    border-bottom: 1px solid var(--line);
+  }
+  .gov-hdr h2 {
+    font-family: var(--font-display); font-weight: 300;
+    font-size: 32px; margin: 0; letter-spacing: -0.02em;
+    color: var(--text-0);
+  }
+  .gov-hdr h2 b { color: var(--accent); font-weight: 500; font-style: italic; }
+  .gov-hdr .sub {
+    font-size: 10px; color: var(--text-2); letter-spacing: 0.18em;
+    text-transform: uppercase; margin-top: 6px;
+  }
+  .gov-hdr-stats {
+    display: flex; gap: 24px;
+    font-family: var(--font-mono); font-size: 10px;
+    color: var(--text-2); letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+  .gov-hdr-stats b {
+    display: block;
+    font-size: 24px;
+    color: var(--accent);
+    font-family: var(--font-display);
+    font-weight: 400;
+    letter-spacing: -0.01em;
+    text-transform: none;
+    margin-top: 4px;
+  }
+
+  .gov-table {
+    display: grid;
+    grid-template-columns: auto 1fr repeat(4, 70px) auto;
+    gap: 1px;
+    background: var(--line);
+    font-size: 11px;
+  }
+  .gov-table > div {
+    background: var(--bg-0);
+    padding: 10px 12px;
+    display: flex; align-items: center;
+  }
+  .gov-table .h {
+    background: var(--bg-1);
+    font-size: 9px; color: var(--text-3);
+    letter-spacing: 0.18em; text-transform: uppercase;
+  }
+  .gov-table .num {
+    font-family: var(--font-mono);
+    color: var(--text-1);
+    justify-content: flex-end;
+  }
+  .gov-table .num b { color: var(--accent); font-weight: 500; }
+  .gov-table .name { color: var(--text-0); }
+  .gov-table .hdot {
+    width: 6px; height: 6px; border-radius: 50%;
+    margin-right: 10px;
+    background: var(--ok); box-shadow: 0 0 4px var(--ok);
+    flex-shrink: 0;
+  }
+  .gov-table .hdot.warn { background: var(--warn); box-shadow: 0 0 4px var(--warn); }
+  .gov-table .hdot.danger { background: var(--danger); box-shadow: 0 0 4px var(--danger); }
+  .gov-table .actions { gap: 6px; font-size: 9px; color: var(--text-3); letter-spacing: 0.1em; }
+  .gov-table .actions button { color: var(--text-2); letter-spacing: 0.12em; }
+  .gov-table .actions button:hover { color: var(--accent); }
+  .gov-table .host-col { display: flex; align-items: center; gap: 0; }
+  .gov-table .host-col .hn { color: var(--text-3); font-family: var(--font-mono); font-size: 10px; margin-left: 8px; }
+
+  .gov-side {
+    border-left: 1px solid var(--line);
+    overflow-y: auto;
+    padding: 24px 20px;
+    background: var(--bg-1);
+  }
+  .gov-side h3 {
+    font-family: var(--font-display);
+    font-weight: 500; font-size: 13px;
+    letter-spacing: -0.01em;
+    margin: 0 0 4px;
+  }
+  .gov-side .sh {
+    font-size: 9px; color: var(--text-3);
+    letter-spacing: 0.2em; text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+
+  .vault {
+    padding: 12px;
+    margin-bottom: 8px;
+    border: 1px solid var(--line-strong);
+    cursor: pointer;
+    position: relative;
+    transition: all 150ms;
+  }
+  .vault:hover { border-color: var(--accent); background: var(--bg-2); }
+  .vault.active { border-color: var(--accent); background: var(--bg-2); }
+  .vault.active::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 2px; background: var(--accent);
+  }
+  .vault-top {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 6px;
+  }
+  .vault-name {
+    font-family: var(--font-display); font-weight: 500;
+    font-size: 12px; color: var(--text-0);
+  }
+  .vault-lock {
+    font-size: 8px; font-family: var(--font-mono);
+    color: var(--accent); letter-spacing: 0.14em;
+  }
+  .vault-meta {
+    display: flex; gap: 14px;
+    font-size: 9px; color: var(--text-2);
+    font-family: var(--font-mono);
+    letter-spacing: 0.08em;
+  }
+  .vault-meta b { color: var(--text-1); font-weight: 400; }
+
+  .vault-add {
+    padding: 12px;
+    text-align: center;
+    font-size: 10px;
+    color: var(--text-3);
+    border: 1px dashed var(--line-strong);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  .vault-add:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* ===========================================================
+     TWEAKS PANEL
+     =========================================================== */
+  .tweaks {
+    position: fixed;
+    bottom: 44px; right: 16px;
+    width: 280px;
+    background: var(--bg-1);
+    border: 1px solid var(--line-strong);
+    z-index: 50;
+    display: none;
+    font-family: var(--font-mono);
+    box-shadow: 0 20px 60px #000000aa;
+  }
+  .tweaks.open { display: block; }
+  .tweaks::before, .tweaks::after {
+    content: ''; position: absolute;
+    width: 8px; height: 8px;
+    border: 1px solid var(--accent);
+  }
+  .tweaks::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+  .tweaks::after { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+  .tweaks-hdr {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+    display: flex; justify-content: space-between;
+    font-size: 9px; letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--text-1);
+  }
+  .tweaks-hdr b { color: var(--accent); font-weight: 500; }
+  .tweaks-body { padding: 8px 0; max-height: 60vh; overflow-y: auto; }
+  .tweak {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+  .tweak:last-child { border-bottom: none; }
+  .tweak label {
+    display: block;
+    font-size: 9px; color: var(--text-3);
+    letter-spacing: 0.18em; text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+  .swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+  .swatch {
+    width: 24px; height: 24px;
+    border: 1px solid var(--line-strong);
+    cursor: pointer;
+    position: relative;
+  }
+  .swatch.active { border-color: var(--text-0); }
+  .swatch.active::after {
+    content: '';
+    position: absolute; inset: -4px;
+    border: 1px solid var(--accent);
+  }
+  .variants { display: grid; grid-template-columns: repeat(3,1fr); gap: 4px; }
+  .variant {
+    font-size: 9px;
+    padding: 8px 4px;
+    text-align: center;
+    border: 1px solid var(--line-strong);
+    color: var(--text-2);
+    cursor: pointer;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .variant.active, .variant:hover { border-color: var(--accent); color: var(--accent); }
+  .tw-slider {
+    width: 100%;
+    -webkit-appearance: none;
+    height: 2px;
+    background: var(--line-strong);
+    outline: none;
+  }
+  .tw-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 10px; height: 10px;
+    background: var(--accent);
+    cursor: pointer;
+  }
+  .tw-toggle {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 10px; color: var(--text-1);
+    cursor: pointer;
+  }
+  .tw-toggle .tg {
+    width: 28px; height: 14px;
+    background: var(--bg-2); border: 1px solid var(--line-strong);
+    position: relative;
+  }
+  .tw-toggle .tg::after {
+    content: '';
+    position: absolute; top: 1px; left: 1px;
+    width: 10px; height: 10px;
+    background: var(--text-3);
+    transition: all 150ms;
+  }
+  .tw-toggle.on .tg::after {
+    left: 15px; background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+  }
+
+  /* Scrollbars */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--line-strong); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+</style>
+</head>
+<body>
+
+<div id="scanlines" class="scanlines"></div>
+<div class="frame-shadow"></div>
+
+<div id="app">
+
+  <!-- ============================================ TITLE BAR -->
+  <div class="titlebar">
+    <div class="brand">
+      <div class="brand-mark" id="brand-mark"></div>
+      <div class="brand-name">REVENANT<span class="ghost">//</span></div>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <div class="window-ctl">
+      <div class="status">
+        <span class="status-dot"></span>
+        <span id="hud-status">GHOST · REYKJAVIK</span>
+      </div>
+      <div class="win-btns">
+        <span></span><span></span><span class="close"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================ ADDRESS BAR -->
+  <div class="addressbar">
+    <div class="nav-btns">
+      <button title="back">◄</button>
+      <button title="forward">►</button>
+      <button title="reload">⟳</button>
+    </div>
+    <div class="url-input">
+      <span class="url-protocol" id="url-protocol">REV://</span>
+      <input id="url" type="text" />
+      <div class="url-badges" id="url-badges">
+        <span class="url-badge ok">E2E</span>
+        <span class="url-badge">TOR</span>
+      </div>
+    </div>
+    <div class="right-rail-btns">
+      <button data-screen="start" title="start">⌂</button>
+      <button data-screen="browsing" title="radar" data-badge="4">◉</button>
+      <button data-screen="graph" title="tab graph">⌬</button>
+      <button data-screen="split" title="split">▦</button>
+      <button data-screen="copilot" title="copilot">◈</button>
+      <button data-screen="gov" title="governor">▤</button>
+      <button id="cmd-btn" title="command ⌘K">⌘K</button>
+    </div>
+  </div>
+
+  <!-- ============================================ VIEWPORT -->
+  <div class="viewport" id="viewport">
+
+    <!-- -------- START PAGE -------- -->
+    <div class="screen active" data-screen="start" data-screen-label="01 Start Page">
+      <div class="start">
+        <!-- rail -->
+        <div class="start-rail">
+          <div class="rail-section">Workspace</div>
+          <div class="rail-item active">
+            <span class="ico">◈</span><span>Ghost Session</span><span class="count">14</span>
+          </div>
+          <div class="rail-item">
+            <span class="ico">▣</span><span>Operations</span><span class="count">7</span>
+          </div>
+          <div class="rail-item">
+            <span class="ico">▤</span><span>Research</span><span class="count">22</span>
+          </div>
+          <div class="rail-item">
+            <span class="ico">▲</span><span>Finance</span><span class="count">3</span>
+          </div>
+          <div class="rail-section">Vaults</div>
+          <div class="rail-item">
+            <span class="ico">✦</span><span>Defcon 2024</span><span class="count">LOCKED</span>
+          </div>
+          <div class="rail-item">
+            <span class="ico">✦</span><span>Blackhat Notes</span><span class="count">LOCKED</span>
+          </div>
+          <div class="rail-section">Pinned Domains</div>
+          <div class="rail-item"><span class="ico">◯</span><span>archive.org</span><span class="count">∞</span></div>
+          <div class="rail-item"><span class="ico">◯</span><span>github.com</span><span class="count">42</span></div>
+          <div class="rail-item"><span class="ico">◯</span><span>hackernews</span><span class="count">1d</span></div>
+          <div class="rail-item"><span class="ico">◯</span><span>arxiv.org</span><span class="count">8</span></div>
+        </div>
+
+        <!-- center -->
+        <div class="start-center">
+          <div class="vortex-bg" id="vortex-bg"></div>
+          <div class="start-content">
+            <div class="start-header">
+              <div class="start-kicker">REVENANT · BUILD 0.9.13 · TERNARY CORE ONLINE</div>
+              <h1 class="start-title">You <b>haunt</b> the network.<br>The network does not see you.</h1>
+              <p class="start-sub">A ternary-core browser built for operators. Three render lanes, three identity shells, three egress routes — parallel, cryptographically isolated, and invisible to fingerprinting. Currently running cold on 2 cores, 311MB.</p>
+            </div>
+
+            <div class="start-search">
+              <span class="prompt">&gt;_</span>
+              <input type="text" placeholder="query · url · command · pgp-fingerprint · onion" />
+              <div class="hint">
+                <kbd>⌘</kbd><kbd>K</kbd>
+                <span style="align-self:center;">for commands</span>
+              </div>
+            </div>
+
+            <div class="speed-dial">
+              <div class="dial-card dial-connect" id="gh-connect" data-connect="github">
+                <div class="dial-host">CONNECT · OAUTH</div>
+                <div class="dial-title">GitHub<br>Profile</div>
+                <div class="dial-meta"><span class="connect-cta">◈ CONNECT →</span><span class="lat">SSO</span></div>
+              </div>
+              <div class="dial-card dial-connect" id="google-connect" data-connect="google">
+                <div class="dial-host">CONNECT · GOOGLE</div>
+                <div class="dial-title">Google<br>Account</div>
+                <div class="dial-meta"><span class="connect-cta">◈ IMPORT →</span><span class="lat">SSO</span></div>
+              </div>
+              <div class="dial-card dial-context" id="context-folder">
+                <div class="dial-host">CONTEXT · FOLDER</div>
+                <div class="dial-title">AI Context<br><span class="ctx-sub">collected resources</span></div>
+                <div class="dial-meta"><span class="ctx-count"><b id="ctx-count">14</b> saved</span><span class="lat ctx-export">EXPORT ↗</span></div>
+                <div class="ctx-stack" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </div>
+              </div>
+              <div class="dial-card">
+                <div class="dial-host">[ONION]</div>
+                <div class="dial-title">ahmia search</div>
+                <div class="dial-meta"><span>ROUTED</span><span class="lat">380ms</span></div>
+              </div>
+              <div class="dial-card">
+                <div class="dial-host">LOCALHOST</div>
+                <div class="dial-title">:3000 / dev</div>
+                <div class="dial-meta"><span>LIVE</span><span class="lat">&lt;1ms</span></div>
+              </div>
+              <div class="dial-card dial-connect" id="mm-connect" data-connect="metamask">
+                <div class="dial-host">CONNECT · WEB3</div>
+                <div class="dial-title">MetaMask<br>Wallet</div>
+                <div class="dial-meta"><span class="connect-cta">◈ CONNECT →</span><span class="lat">EVM</span></div>
+              </div>
+              <div class="dial-card dial-guide" id="guide-tile">
+                <div class="dial-host">REV://GUIDE · BLOG</div>
+                <div class="dial-title">The Revenant<br>Manual</div>
+                <div class="dial-meta"><span><b>41</b> chapters</span><span class="lat">READ →</span></div>
+              </div>
+              <div class="dial-card">
+                <div class="dial-host">+ NEW PIN</div>
+                <div class="dial-title">&nbsp;</div>
+                <div class="dial-meta"><span>&nbsp;</span><span class="lat">&nbsp;</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- right -->
+        <div class="start-right">
+          <div>
+            <div class="panel-h">System <span class="live">LIVE</span></div>
+            <div class="sys-stat"><span class="label">CPU (browser)</span><span class="val"><b>2.1%</b></span></div>
+            <div class="bar"><i style="width:2.1%"></i></div>
+            <div class="sys-stat"><span class="label">Memory</span><span class="val"><b>311</b>mb</span></div>
+            <div class="bar"><i style="width:9%"></i></div>
+            <div class="sys-stat"><span class="label">Network I/O</span><span class="val"><b>18</b>kb/s ↓</span></div>
+            <div class="sys-stat"><span class="label">GPU</span><span class="val"><b>0.4%</b></span></div>
+            <div class="sys-stat"><span class="label">Tabs sleeping</span><span class="val"><b>9</b>/14</span></div>
+          </div>
+
+          <div>
+            <div class="panel-h">Egress <span class="live">GHOST</span></div>
+            <div class="sys-stat"><span class="label">Exit</span><span class="val">REYKJAVIK <b>IS</b></span></div>
+            <div class="sys-stat"><span class="label">Hops</span><span class="val"><b>3</b></span></div>
+            <div class="sys-stat"><span class="label">Latency</span><span class="val"><b>41</b>ms</span></div>
+            <div class="sys-stat"><span class="label">Fingerprint</span><span class="val"><b>ROTATED</b></span></div>
+            <div class="sys-stat"><span class="label">DNS</span><span class="val">DoH·CLOUDFLARE</span></div>
+          </div>
+
+          <div>
+            <div class="panel-h">Threats today <span class="live">24H</span></div>
+            <div class="threat-list">
+              <div class="threat-item"><span class="tcode blocked">✕</span><span class="thost">doubleclick.net</span><span class="tcount">412</span></div>
+              <div class="threat-item"><span class="tcode blocked">✕</span><span class="thost">google-analytics</span><span class="tcount">286</span></div>
+              <div class="threat-item"><span class="tcode blocked">✕</span><span class="thost">facebook.net</span><span class="tcount">194</span></div>
+              <div class="threat-item"><span class="tcode blocked">✕</span><span class="thost">scorecardresearch</span><span class="tcount">88</span></div>
+              <div class="threat-item"><span class="tcode">!</span><span class="thost">canvas-fp.attempt</span><span class="tcount">14</span></div>
+              <div class="threat-item"><span class="tcode">!</span><span class="thost">webrtc.leak.attempt</span><span class="tcount">3</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- -------- BROWSING + RADAR -------- -->
+    <div class="screen" data-screen="browsing" data-screen-label="02 Browsing + Radar">
+      <div class="browsing">
+        <div class="page-viewport">
+          <div class="page-header">
+            <div class="page-kicker">WIRED / SECURITY · 7 MIN READ</div>
+            <h1>The browser is the last operating system — and it's been compromised for twenty years.</h1>
+            <div class="byline">
+              <span>BY S. HARADA</span>
+              <span>APR 17 2026</span>
+              <span>ARCHIVED · 4 MIRRORS</span>
+            </div>
+          </div>
+          <div class="page-body">
+            <p>Every click you have ever made passed through a chain of middlemen who knew more about the tab than you did. Fingerprint brokers, analytics shims, supply-chain scripts embedded four layers deep in a stylesheet — they watch, and the watching is the product.</p>
+            <div class="page-placeholder">[ EDITORIAL IMAGE — DROP IN ]</div>
+            <p>Revenant is a response. The architecture is deliberately adversarial: three independent render lanes, each with its own identity shell, each able to pretend to be a different browser on a different machine in a different country at the same time. Nothing correlates. That is the feature.</p>
+            <p>For the first time in twenty years, the browser stops being the collection point. It becomes the ghost — reading, recording, returning — and leaving no shadow.</p>
+          </div>
+        </div>
+
+        <div class="radar">
+          <div class="radar-header">
+            <div class="radar-title"><span>THREAT RADAR</span><span class="dot"></span></div>
+            <div class="radar-score"><b>98</b><span class="grade">GRADE&nbsp;A+ / SHIELDED</span></div>
+            <div class="radar-summary">This domain attempted to load 47 third-party scripts, 18 trackers, and 4 fingerprinting probes. All isolated in sandbox lane 2.</div>
+          </div>
+
+          <div class="radar-scope">
+            <div><div class="label">BLOCKED</div><div class="val ok">47</div></div>
+            <div><div class="label">ALLOWED</div><div class="val">12</div></div>
+          </div>
+
+          <div class="radar-section">
+            <div class="panel-h" style="margin-bottom:6px;">Active Threats</div>
+            <div class="radar-item"><span class="ico block">✕</span><span class="host">doubleclick.net<span class="sub">advertising tracker</span></span><span class="count bad">18</span></div>
+            <div class="radar-item"><span class="ico block">✕</span><span class="host">facebook.net<span class="sub">social graph probe</span></span><span class="count bad">9</span></div>
+            <div class="radar-item"><span class="ico block">✕</span><span class="host">hotjar.com<span class="sub">session replay</span></span><span class="count bad">6</span></div>
+            <div class="radar-item"><span class="ico">✓</span><span class="host">fonts.gstatic.com<span class="sub">font delivery · allowed</span></span><span class="count">3</span></div>
+            <div class="radar-item"><span class="ico">✓</span><span class="host">cdn.wired.com<span class="sub">first-party · allowed</span></span><span class="count">2</span></div>
+          </div>
+
+          <div class="radar-section">
+            <div class="panel-h" style="margin-bottom:6px;">Identity Shell</div>
+            <div class="identity-card">
+              <div class="identity-row"><span>User-Agent</span><b>FF 128 / WIN</b></div>
+              <div class="identity-row"><span>Canvas</span><b>SPOOFED</b></div>
+              <div class="identity-row"><span>WebGL</span><b>MASKED</b></div>
+              <div class="identity-row"><span>Fonts</span><b>12 generic</b></div>
+              <div class="identity-row"><span>Timezone</span><b>UTC+0</b></div>
+              <div class="identity-row"><span>Language</span><b>en-US</b></div>
+            </div>
+          </div>
+
+          <div class="radar-section" style="padding-bottom: 8px;">
+            <div class="panel-h">Egress Node</div>
+          </div>
+          <div class="vpn-flags">
+            <div class="vpn-flag active">
+              <span class="flag-dot"></span>
+              <span>REYKJAVIK · IS</span>
+              <span class="ms">41ms</span>
+              <span>◈</span>
+            </div>
+            <div class="vpn-flag">
+              <span class="flag-dot"></span>
+              <span>ZÜRICH · CH</span>
+              <span class="ms">68ms</span>
+              <span></span>
+            </div>
+            <div class="vpn-flag">
+              <span class="flag-dot"></span>
+              <span>TOKYO · JP</span>
+              <span class="ms">112ms</span>
+              <span></span>
+            </div>
+            <div class="vpn-flag">
+              <span class="flag-dot"></span>
+              <span>[ONION] 3-HOP</span>
+              <span class="ms">380ms</span>
+              <span></span>
+            </div>
+            <div class="vpn-flag">
+              <span class="flag-dot"></span>
+              <span>LOCAL · NO ROUTE</span>
+              <span class="ms">0ms</span>
+              <span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- -------- TAB GRAPH -------- -->
+    <div class="screen" data-screen="graph" data-screen-label="03 Tab Graph">
+      <div class="graph" id="graph-canvas">
+        <svg class="graph-svg" id="graph-svg" viewBox="0 0 1200 700" preserveAspectRatio="xMidYMid meet"></svg>
+        <div class="graph-legend">
+          <h4>The research trail</h4>
+          <p>Every tab remembers where it came from. Reconstruct a session as a directed graph — see the branches you went down, the rabbit holes, the dead ends.</p>
+        </div>
+        <div class="graph-stats">
+          <span>NODES</span><b>14</b>
+          <span>DEPTH</span><b>5</b>
+          <span>SESSION</span><b>02:41:17</b>
+          <span>ORPHANS</span><b>0</b>
+        </div>
+      </div>
+    </div>
+
+    <!-- -------- SPLIT VIEW -------- -->
+    <div class="screen" data-screen="split" data-screen-label="04 Split View">
+      <div class="split">
+        <div class="split-pane focused">
+          <div class="pane-header">
+            <span class="pdot"></span>
+            <span class="purl">https://github.com/chromium/chromium</span>
+            <span class="pctl"><button>⇔</button><button>✕</button></span>
+          </div>
+          <div class="pane-body">
+            <h3>chromium / chromium</h3>
+            <div style="font-size:10px; color: var(--text-3); letter-spacing: 0.1em; margin-bottom: 16px;">MIRROR · PUBLIC · 17,342 ★ · DEFAULT: MAIN</div>
+            <div class="mock-row"><span class="k">src/</span><span class="v">content/browser/</span><span class="n">4,128 files</span></div>
+            <div class="mock-row"><span class="k">src/</span><span class="v">content/renderer/</span><span class="n">2,902 files</span></div>
+            <div class="mock-row"><span class="k">src/</span><span class="v">net/</span><span class="n">1,841 files</span></div>
+            <div class="mock-row"><span class="k">src/</span><span class="v">third_party/blink/</span><span class="n">38,771 files</span></div>
+            <div class="mock-row"><span class="k">src/</span><span class="v">v8/</span><span class="n">9,443 files</span></div>
+            <div class="mock-row"><span class="k">src/</span><span class="v">sandbox/</span><span class="n">624 files</span></div>
+            <div style="margin-top: 16px; padding: 10px; border: 1px solid var(--line-strong); font-size: 10px; color: var(--text-1); font-family: var(--font-mono);">
+              <div style="color: var(--accent); margin-bottom: 6px;">// REVENANT FORK-DIFF</div>
+              removed: metrics, crash-reporter, safebrowsing-phone-home<br>
+              replaced: net/ → revenant-net (ternary-routed)<br>
+              added: sandbox/identity-shell, sandbox/governor
+            </div>
+          </div>
+        </div>
+        <div class="split-pane">
+          <div class="pane-header">
+            <span class="pdot"></span>
+            <span class="purl">rev://perf / live-bench</span>
+            <span class="pctl"><button>⇔</button><button>✕</button></span>
+          </div>
+          <div class="pane-body">
+            <h3>Live benchmark · Speedometer 3</h3>
+            <div class="chart"></div>
+            <div class="mock-row"><span class="k">REVENANT</span><span class="v">ternary-core, ghost on</span><span class="n">38.4</span></div>
+            <div class="mock-row"><span class="k">CHROME</span><span class="v">default, all extensions off</span><span class="n">24.1</span></div>
+            <div class="mock-row"><span class="k">ARC</span><span class="v">default</span><span class="n">22.8</span></div>
+            <div class="mock-row"><span class="k">OPERA GX</span><span class="v">default, gx control on</span><span class="n">15.2</span></div>
+            <div class="mock-row"><span class="k">FIREFOX</span><span class="v">ETP strict</span><span class="n">19.7</span></div>
+            <div style="margin-top: 12px; font-size: 9px; color: var(--text-3); letter-spacing: 0.18em; text-transform: uppercase;">
+              Higher is faster · Same hardware · 2026 M4 Max
+            </div>
+          </div>
+        </div>
+        <div class="split-pane">
+          <div class="pane-header">
+            <span class="pdot"></span>
+            <span class="purl">https://arxiv.org/abs/2603.04921</span>
+            <span class="pctl"><button>⇔</button><button>✕</button></span>
+          </div>
+          <div class="pane-body">
+            <h3>Ternary compute for browser render pipelines</h3>
+            <div style="font-size:10px; color: var(--text-3); letter-spacing:.1em; margin-bottom:10px;">K. Okafor et al · cs.DC · Mar 2026</div>
+            <p style="font-family: var(--font-display); font-weight:300; font-size: 12px; line-height: 1.65; color: var(--text-1);">
+              We present a three-state branch predictor for DOM-reflow pipelines. By representing layout dependencies in balanced ternary (-1, 0, +1) we reduce paint thrashing on modern SPAs by 47.3%, while cutting memory footprint by a factor of 2.1 versus binary-encoded equivalents.
+            </p>
+            <div class="mock-row"><span class="k">citations</span><span class="v">forward/backward</span><span class="n">128 / 44</span></div>
+            <div class="mock-row"><span class="k">pdf</span><span class="v">arxiv</span><span class="n">2.4 MB</span></div>
+          </div>
+        </div>
+        <div class="split-pane">
+          <div class="pane-header">
+            <span class="pdot"></span>
+            <span class="purl">rev://wallet / 0xA4f9…e12</span>
+            <span class="pctl"><button>⇔</button><button>✕</button></span>
+          </div>
+          <div class="pane-body">
+            <h3>Wallet · Ghost identity #3</h3>
+            <div class="mock-row"><span class="k">ETH</span><span class="v">base</span><span class="n">Ξ 12.418</span></div>
+            <div class="mock-row"><span class="k">USDC</span><span class="v">base</span><span class="n">4,280.00</span></div>
+            <div class="mock-row"><span class="k">XMR</span><span class="v">monero</span><span class="n">31.22</span></div>
+            <div class="mock-row"><span class="k">SOL</span><span class="v">solana</span><span class="n">142.1</span></div>
+            <div style="margin-top: 14px; padding: 10px; border-left: 2px solid var(--accent); font-size: 10px; color: var(--text-1); line-height: 1.6;">
+              This wallet is <b style="color: var(--accent);">bound to Ghost Identity #3</b>. Other tabs cannot see it. Switch identity to rotate keys.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- -------- AI COPILOT -------- -->
+    <div class="screen" data-screen="copilot" data-screen-label="05 Copilot">
+      <div class="copilot">
+        <div class="page-viewport">
+          <div class="page-header">
+            <div class="page-kicker">ARXIV · CS.CR · PREPRINT</div>
+            <h1>Ternary-Routed Egress for Adversarial Browsing: A Four-Year Deployment Study.</h1>
+            <div class="byline">
+              <span>M. IONESCU · R. PARK · S. HARADA</span>
+              <span>APR 2026</span>
+              <span>128 CITATIONS</span>
+            </div>
+          </div>
+          <div class="page-body">
+            <p>We describe a production deployment of a ternary-routed browser egress system serving 412,000 daily active users over a four-year window. Each outbound request is replicated along three cryptographically-independent paths, with quorum-based response selection.</p>
+            <p>This approach is resistant to single-ISP observation, rogue-node injection, and timing-correlation attacks — at the cost of 2.8× bandwidth overhead and 41ms p50 latency increase, both of which are well within user tolerance as measured by retention.</p>
+            <div class="page-placeholder">[ FIGURE 3 — LATENCY CDF ]</div>
+            <p>We find that 94% of users do not notice the latency penalty, and 61% report the additional privacy guarantee as their primary reason for adoption.</p>
+          </div>
+        </div>
+
+        <div class="copilot-side">
+          <div class="copilot-hdr">
+            <h3><span class="dot"></span>Revenant Copilot</h3>
+            <div class="model">LOCAL · 7B</div>
+          </div>
+          <div class="copilot-msgs">
+            <div class="msg user">
+              <div class="who">YOU</div>
+              <div class="bubble">tl;dr the page + what's the catch?</div>
+            </div>
+            <div class="msg">
+              <div class="who">REVENANT</div>
+              <div class="bubble">
+                Four-year production study of a <b>ternary-routed browser egress</b> system across 412K DAU.<br><br>
+                <b>Result:</b> resistant to single-ISP observation, rogue-node injection, and timing-correlation attacks.<br>
+                <b>Cost:</b> 2.8× bandwidth overhead and +41ms p50 latency.<br>
+                <b>Verdict:</b> 94% of users don't notice. Privacy is the #1 retention driver.
+                <div class="ref">
+                  <a>¶2</a><a>¶4</a><a>table-3</a><a>fig-5</a>
+                </div>
+              </div>
+            </div>
+            <div class="msg user">
+              <div class="who">YOU</div>
+              <div class="bubble">compare bandwidth overhead to Tor</div>
+            </div>
+            <div class="msg">
+              <div class="who">REVENANT</div>
+              <div class="bubble">
+                Paper cites Tor at <b>3.4–4.1×</b> overhead with p50 latency +180–320ms (depending on circuit length). Ternary-routed egress sits at <b>2.8× / +41ms</b> — roughly <b>4× faster</b> for comparable anonymity at 3 hops.
+                <div class="ref"><a>§5.2</a><a>tor-metrics</a></div>
+              </div>
+            </div>
+          </div>
+          <div class="copilot-actions">
+            <span class="chip">Summarize</span>
+            <span class="chip">Extract citations</span>
+            <span class="chip">Scrape table</span>
+            <span class="chip">Save to Vault</span>
+            <span class="chip">Translate</span>
+          </div>
+          <div class="copilot-input">
+            <span class="pr">&gt;</span>
+            <input placeholder="ask, scrape, automate…" />
+            <span class="send">SEND ⏎</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- -------- RESOURCE GOVERNOR / VAULTS -------- -->
+    <div class="screen" data-screen="gov" data-screen-label="06 Governor + Vaults">
+      <div class="gov">
+        <div class="gov-main">
+          <div class="gov-hdr">
+            <div>
+              <h2>Resource <b>Governor</b></h2>
+              <div class="sub">PER-TAB CPU · RAM · NETWORK CAPS</div>
+            </div>
+            <div class="gov-hdr-stats">
+              <div>TOTAL CPU<b>4.8%</b></div>
+              <div>TOTAL RAM<b>512MB</b></div>
+              <div>NET ↓<b>22kb/s</b></div>
+              <div>ACTIVE TABS<b>14</b></div>
+            </div>
+          </div>
+
+          <div class="gov-table">
+            <div class="h" style="width: 30px;"></div>
+            <div class="h">TAB</div>
+            <div class="h num">CPU</div>
+            <div class="h num">MEM</div>
+            <div class="h num">NET</div>
+            <div class="h num">CAP</div>
+            <div class="h" style="width: 80px;"></div>
+
+            <div><span class="hdot"></span></div>
+            <div class="host-col"><span class="name">chromium / chromium</span><span class="hn">github.com</span></div>
+            <div class="num"><b>1.2%</b></div>
+            <div class="num"><b>88</b>mb</div>
+            <div class="num"><b>4</b>kb</div>
+            <div class="num">50%</div>
+            <div class="actions"><button>SLEEP</button></div>
+
+            <div><span class="hdot warn"></span></div>
+            <div class="host-col"><span class="name">Ternary egress study</span><span class="hn">arxiv.org</span></div>
+            <div class="num"><b>0.4%</b></div>
+            <div class="num"><b>44</b>mb</div>
+            <div class="num"><b>0</b>kb</div>
+            <div class="num">50%</div>
+            <div class="actions"><button>SLEEP</button></div>
+
+            <div><span class="hdot"></span></div>
+            <div class="host-col"><span class="name">Ghost article</span><span class="hn">wired.com</span></div>
+            <div class="num"><b>0.3%</b></div>
+            <div class="num"><b>62</b>mb</div>
+            <div class="num"><b>0</b>kb</div>
+            <div class="num">50%</div>
+            <div class="actions"><button>SLEEP</button></div>
+
+            <div><span class="hdot danger"></span></div>
+            <div class="host-col"><span class="name">Figma — Revenant UI</span><span class="hn">figma.com</span></div>
+            <div class="num"><b>2.1%</b></div>
+            <div class="num"><b>184</b>mb</div>
+            <div class="num"><b>12</b>kb</div>
+            <div class="num"><b style="color:var(--warn);">NO CAP</b></div>
+            <div class="actions"><button>CAP 80%</button></div>
+
+            <div><span class="hdot"></span></div>
+            <div class="host-col"><span class="name">Wallet · id #3</span><span class="hn">rev://wallet</span></div>
+            <div class="num"><b>0.1%</b></div>
+            <div class="num"><b>12</b>mb</div>
+            <div class="num"><b>&lt;1</b>kb</div>
+            <div class="num">25%</div>
+            <div class="actions"><button>SLEEP</button></div>
+
+            <div><span class="hdot"></span></div>
+            <div class="host-col"><span class="name">Hacker News</span><span class="hn">news.ycombinator</span></div>
+            <div class="num"><b>0%</b></div>
+            <div class="num"><b>8</b>mb</div>
+            <div class="num"><b>0</b>kb</div>
+            <div class="num">50%</div>
+            <div class="actions"><button>WAKE</button></div>
+
+            <div><span class="hdot"></span></div>
+            <div class="host-col"><span class="name">Ahmia (onion)</span><span class="hn">[3-hop]</span></div>
+            <div class="num"><b>0.1%</b></div>
+            <div class="num"><b>18</b>mb</div>
+            <div class="num"><b>2</b>kb</div>
+            <div class="num">25%</div>
+            <div class="actions"><button>SLEEP</button></div>
+
+            <div><span class="hdot"></span></div>
+            <div class="host-col"><span class="name">localhost :3000</span><span class="hn">127.0.0.1</span></div>
+            <div class="num"><b>0.6%</b></div>
+            <div class="num"><b>96</b>mb</div>
+            <div class="num"><b>4</b>kb</div>
+            <div class="num">∞</div>
+            <div class="actions"><button>DEV</button></div>
+          </div>
+
+          <div style="margin-top: 24px; padding: 14px 16px; border: 1px solid var(--line-strong); display: flex; gap: 20px; align-items: center;">
+            <span style="font-size: 10px; color: var(--text-3); letter-spacing: 0.18em; text-transform: uppercase;">GLOBAL HARD CAPS</span>
+            <span style="font-family: var(--font-mono); font-size: 11px; color: var(--text-1);">CPU <b style="color: var(--accent);">30%</b></span>
+            <span style="font-family: var(--font-mono); font-size: 11px; color: var(--text-1);">RAM <b style="color: var(--accent);">2.0 GB</b></span>
+            <span style="font-family: var(--font-mono); font-size: 11px; color: var(--text-1);">NET <b style="color: var(--accent);">200 kb/s</b></span>
+            <span style="flex: 1; text-align: right; font-size: 10px; color: var(--text-3); letter-spacing: 0.15em;">— COMPARABLE BUILD WOULD BE <b style="color: var(--danger);">3.2×</b> THIS RIGHT NOW —</span>
+          </div>
+        </div>
+
+        <div class="gov-side">
+          <h3>Session Vaults</h3>
+          <div class="sh">ENCRYPTED · SNAPSHOTABLE · RESUMABLE</div>
+
+          <div class="vault active">
+            <div class="vault-top">
+              <div class="vault-name">Ghost Session</div>
+              <div class="vault-lock">● OPEN</div>
+            </div>
+            <div class="vault-meta">
+              <span>14 tabs</span>
+              <span>2h 41m</span>
+              <span>311 MB</span>
+            </div>
+          </div>
+
+          <div class="vault">
+            <div class="vault-top">
+              <div class="vault-name">Defcon 32 Notes</div>
+              <div class="vault-lock">◈ LOCKED</div>
+            </div>
+            <div class="vault-meta">
+              <span>47 tabs</span>
+              <span>18h 02m</span>
+              <span>1.2 GB</span>
+            </div>
+          </div>
+
+          <div class="vault">
+            <div class="vault-top">
+              <div class="vault-name">Research · Ternary</div>
+              <div class="vault-lock">◈ LOCKED</div>
+            </div>
+            <div class="vault-meta">
+              <span>22 tabs</span>
+              <span>6h 12m</span>
+              <span>480 MB</span>
+            </div>
+          </div>
+
+          <div class="vault">
+            <div class="vault-top">
+              <div class="vault-name">Finance · id #2</div>
+              <div class="vault-lock">◈ LOCKED</div>
+            </div>
+            <div class="vault-meta">
+              <span>3 tabs</span>
+              <span>4m</span>
+              <span>18 MB</span>
+            </div>
+          </div>
+
+          <div class="vault">
+            <div class="vault-top">
+              <div class="vault-name">Blackhat Archive</div>
+              <div class="vault-lock">◈ LOCKED</div>
+            </div>
+            <div class="vault-meta">
+              <span>112 tabs</span>
+              <span>48h+</span>
+              <span>3.4 GB</span>
+            </div>
+          </div>
+
+          <div class="vault-add">+ SNAPSHOT CURRENT SESSION</div>
+
+          <div style="margin-top: 24px; padding: 12px; border-left: 2px solid var(--accent); font-size: 10px; color: var(--text-1); line-height: 1.6;">
+            Vaults are <b style="color:var(--accent);">encrypted at rest with a key derived from your PGP identity.</b> Even if someone has the disk, they have noise.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- -------- COMMAND PALETTE (overlay) -------- -->
+    <div class="cmd-overlay" id="cmd" style="display:none;">
+      <div class="cmd">
+        <div class="cmd-input">
+          <span class="prompt">⌘_</span>
+          <input id="cmd-input" placeholder="command · url · tab · spell · script" autofocus />
+          <span class="esc">ESC</span>
+        </div>
+        <div class="cmd-list">
+          <div class="cmd-group">ACTIONS</div>
+          <div class="cmd-item sel">
+            <span class="ico">◈</span>
+            <div>
+              <div class="name">Rotate <b>identity shell</b></div>
+              <div class="desc">new fingerprint · new exit · new canvas hash</div>
+            </div>
+            <span class="kbd">⌘⇧I</span>
+          </div>
+          <div class="cmd-item">
+            <span class="ico">▲</span>
+            <div>
+              <div class="name">Open in <b>Ghost Mode</b> (per-tab)</div>
+              <div class="desc">isolated cookie jar, separate egress, no disk writes</div>
+            </div>
+            <span class="kbd">⌘⇧N</span>
+          </div>
+          <div class="cmd-item">
+            <span class="ico">⌬</span>
+            <div>
+              <div class="name">Show <b>tab graph</b></div>
+              <div class="desc">visualize this session's research trail</div>
+            </div>
+            <span class="kbd">⌘G</span>
+          </div>
+          <div class="cmd-item">
+            <span class="ico">✦</span>
+            <div>
+              <div class="name">Snapshot to <b>vault</b></div>
+              <div class="desc">encrypt current session · resumable later</div>
+            </div>
+            <span class="kbd">⌘S</span>
+          </div>
+          <div class="cmd-group">SCRIPTING</div>
+          <div class="cmd-item">
+            <span class="ico">&gt;_</span>
+            <div>
+              <div class="name">Run <b>page script</b></div>
+              <div class="desc">js · python · shell · against active tab DOM</div>
+            </div>
+            <span class="kbd">⌘J</span>
+          </div>
+          <div class="cmd-item">
+            <span class="ico">&gt;_</span>
+            <div>
+              <div class="name">Scrape <b>this table</b> → CSV</div>
+              <div class="desc">detected: benchmark chart (5 rows, 3 cols)</div>
+            </div>
+            <span class="kbd">⌘⇧E</span>
+          </div>
+          <div class="cmd-group">NAVIGATE</div>
+          <div class="cmd-item">
+            <span class="ico">→</span>
+            <div>
+              <div class="name">rev://governor</div>
+              <div class="desc">Resource Governor · 14 tabs · 512MB</div>
+            </div>
+            <span class="kbd">g G</span>
+          </div>
+          <div class="cmd-item">
+            <span class="ico">→</span>
+            <div>
+              <div class="name">rev://wallet</div>
+              <div class="desc">Ξ 12.418 · 3 identities</div>
+            </div>
+            <span class="kbd">g W</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============================================ BOTTOM HUD -->
+  <div class="hud">
+    <div class="hud-left">
+      <span>◆ BUILD 0.9.13</span>
+      <span>CORES <b style="color:var(--accent);">3/3</b></span>
+      <span>TERNARY CORE <b style="color:var(--accent);">ONLINE</b></span>
+      <span>SANDBOX LANES <b style="color:var(--accent);">A·B·C</b></span>
+    </div>
+    <div class="hud-center">
+      <div class="hud-metric"><span class="sym">◈</span><b>ghost</b></div>
+      <div class="hud-metric"><span class="sym">▲</span><b>shielded</b></div>
+      <div class="hud-metric"><span class="sym">✦</span><b>vault-sync</b></div>
+    </div>
+    <div class="hud-right">
+      <span>FPS <b style="color:var(--accent);" id="hud-fps">120</b></span>
+      <span>NET <b id="hud-net">18kb/s</b></span>
+      <span>CPU <b id="hud-cpu">2.1%</b></span>
+      <span>MEM <b id="hud-mem">311mb</b></span>
+      <span id="hud-time">00:00:00 UTC</span>
+    </div>
+  </div>
+</div>
+
+<!-- Tweaks panel removed per user request. Core logic below remains active for EDITMODE host. -->
+
+<!-- Connect OAuth modal (provider driven) -->
+<div class="oauth-overlay" id="oauth">
+  <div class="oauth-card">
+    <div class="oauth-kicker"><span id="oauth-kicker-l">REV://OAUTH</span><span>ESC</span></div>
+    <h2 class="oauth-title" id="oauth-title">Bind <b>GitHub</b> to Ghost Identity #3</h2>
+    <p class="oauth-sub" id="oauth-sub">Revenant routes traffic through the ghost lane.</p>
+    <div class="oauth-scopes">
+      <div class="sh" id="oauth-scope-head">REQUESTED SCOPES</div>
+      <div id="oauth-scope-list"></div>
+    </div>
+    <div class="oauth-actions">
+      <button class="oauth-btn" id="oauth-cancel">Cancel</button>
+      <button class="oauth-btn primary" id="oauth-authorize">◈ Authorize</button>
+    </div>
+    <div class="oauth-footnote" id="oauth-foot">KEYS ARE SEALED IN VAULT · REVOCABLE ANY TIME</div>
+  </div>
+</div>
+
+<!-- AI Context folder drawer -->
+<div class="ctx-drawer" id="ctx-drawer">
+  <div class="ctx-panel">
+    <div class="ctx-head">
+      <span>REV://CONTEXT · FOLDER 001 <b>"default"</b></span>
+      <span>ESC</span>
+    </div>
+    <div class="ctx-title-row">
+      <h2 class="ctx-title">AI <i>Context</i> folder</h2>
+      <div class="ctx-kpis">
+        <span><b id="ctx-k-items">14</b> items</span>
+        <span><b id="ctx-k-tokens">42.8k</b> tokens</span>
+        <span><b>3</b> sources</span>
+      </div>
+    </div>
+    <div class="ctx-list" id="ctx-list"></div>
+    <div class="ctx-foot">
+      <span class="ctx-stat">EXPORT → <b>claude · chatgpt · gemini · local</b></span>
+      <div class="ctx-actions">
+        <button class="ctx-btn" id="ctx-clear">Clear</button>
+        <button class="ctx-btn" id="ctx-export">Export JSON</button>
+        <button class="ctx-btn primary" id="ctx-push">◈ Push to AI memory</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Guide drawer -->
+<div class="ctx-drawer" id="guide-drawer">
+  <div class="guide-panel">
+    <div class="guide-head">
+      <span>REV://GUIDE · v4.2.1 · <b style="color:var(--accent)">41 CHAPTERS</b></span>
+      <span class="gh-title">The Revenant <i>Manual</i></span>
+      <span>ESC</span>
+    </div>
+    <div class="guide-toc" id="guide-toc"></div>
+    <div class="guide-body" id="guide-body"></div>
+    <div class="guide-foot">
+      <span>READING TIME · <b style="color:var(--text-0)">4 MIN</b></span>
+      <span>← → NAVIGATE CHAPTERS · ESC TO CLOSE</span>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =================================================================
+   REVENANT — UI logic
+   ================================================================= */
+
+/* ---------- CONNECT / OAUTH MODAL ---------- */
+const CONNECT_PROVIDERS = {
+  github: {
+    kicker: 'REV://OAUTH · GITHUB',
+    title: 'Bind <b>GitHub</b> to Ghost Identity #3',
+    sub: 'Revenant routes GitHub traffic through the ghost lane. Your identity shell stays active — GitHub sees a clean FF 128 / Reykjavik node, not your real machine.',
+    scopeHead: 'REQUESTED SCOPES',
+    scopes: [
+      'read:user · basic profile',
+      'repo:read · clone & pull',
+      'gist · read + write',
+      'notifications · unread count only',
+    ],
+  },
+  google: {
+    kicker: 'REV://OAUTH · GOOGLE',
+    title: 'Import <b>Google Account</b> into Revenant',
+    sub: 'Essential settings mirror into this browser — mail, contacts, saved passwords, bookmarks, history, realtime news feed. Theme, layout and identity shells stay Revenant-native.',
+    scopeHead: 'WILL IMPORT',
+    scopes: [
+      'Gmail · inbox + unread count',
+      'Passwords · encrypted vault sync',
+      'History + Bookmarks · read/write',
+      'News · personalised realtime feed',
+      'Contacts · autofill only',
+    ],
+    foot: 'THEME, LAYOUT &amp; IDENTITY SHELLS REMAIN LOCAL',
+  },
+  metamask: {
+    kicker: 'REV://WEB3 · METAMASK',
+    title: 'Connect <b>MetaMask</b> to Revenant',
+    sub: 'Revenant becomes your dApp surface. Signatures are routed through the ghost lane; keys never leave your extension. Chain state is cached locally so explorers load instantly.',
+    scopeHead: 'REQUESTED PERMISSIONS',
+    scopes: [
+      'eth_accounts · public address(es)',
+      'eth_chainId · active network',
+      'personal_sign · per-site confirmation',
+      'wallet_watchAsset · add tokens',
+    ],
+    foot: 'NO TRANSACTION IS EVER AUTO-SIGNED',
+  },
+};
+(function initConnectModal(){
+  const overlay = document.getElementById('oauth');
+  if (!overlay) return;
+  const els = {
+    kicker: document.getElementById('oauth-kicker-l'),
+    title:  document.getElementById('oauth-title'),
+    sub:    document.getElementById('oauth-sub'),
+    shead:  document.getElementById('oauth-scope-head'),
+    list:   document.getElementById('oauth-scope-list'),
+    foot:   document.getElementById('oauth-foot'),
+    ok:     document.getElementById('oauth-authorize'),
+    no:     document.getElementById('oauth-cancel'),
+  };
+  const open = (key) => {
+    const p = CONNECT_PROVIDERS[key] || CONNECT_PROVIDERS.github;
+    els.kicker.textContent = p.kicker;
+    els.title.innerHTML = p.title;
+    els.sub.textContent = p.sub;
+    els.shead.textContent = p.scopeHead;
+    els.list.innerHTML = p.scopes.map(s => `<div class="row">${s}</div>`).join('');
+    els.foot.innerHTML = p.foot || 'KEYS ARE SEALED IN VAULT · REVOCABLE ANY TIME';
+    overlay.classList.add('open');
+  };
+  const close = () => overlay.classList.remove('open');
+  document.querySelectorAll('.dial-card.dial-connect').forEach(card => {
+    card.addEventListener('click', () => open(card.dataset.connect || 'github'));
+  });
+  els.no.addEventListener('click', close);
+  els.ok.addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+})();
+
+/* ---------- AI CONTEXT FOLDER ---------- */
+const CONTEXT_ITEMS = [
+  { ico: 'PDF', name: 'Ternary egress study — §3 methodology', host: 'arxiv.org/2603.04921', tokens: '4.2k', tag: 'paper' },
+  { ico: 'MD',  name: 'Browser OS — Wired longread',           host: 'wired.com',               tokens: '3.1k', tag: 'article' },
+  { ico: 'SRC', name: 'chromium/net/socket — pooling notes',    host: 'github.com',              tokens: '6.8k', tag: 'code', accent: true },
+  { ico: 'HN',  name: 'Thread · "Why QUIC is inevitable"',       host: 'news.ycombinator.com',    tokens: '2.4k', tag: 'thread' },
+  { ico: 'WEB', name: 'OKLCH in practice — cookbook',            host: 'evilmartians.com',        tokens: '1.9k', tag: 'ref' },
+  { ico: 'PDF', name: 'RFC 9114 · HTTP/3 — excerpt',             host: 'datatracker.ietf.org',    tokens: '3.3k', tag: 'spec' },
+  { ico: 'MD',  name: 'Post-Chrome browsers — field notes',      host: 'substack',                tokens: '2.7k', tag: 'article' },
+  { ico: 'SRC', name: 'revenant/ghost-lane — architecture',      host: 'internal',                tokens: '5.1k', tag: 'code', accent: true },
+  { ico: 'HN',  name: 'Ask HN · session vaults UX',              host: 'news.ycombinator.com',    tokens: '1.2k', tag: 'thread' },
+  { ico: 'WEB', name: 'OpenAI memory primitives (docs)',         host: 'platform.openai.com',     tokens: '2.0k', tag: 'ref' },
+  { ico: 'PDF', name: 'Anthropic · Claude tool-use spec',        host: 'anthropic.com',           tokens: '3.9k', tag: 'spec', accent: true },
+  { ico: 'MD',  name: 'UX pattern · command palettes',           host: 'notes',                   tokens: '1.4k', tag: 'note' },
+  { ico: 'WEB', name: 'CSS grid — subgrid shipping status',      host: 'caniuse.com',             tokens: '0.6k', tag: 'ref' },
+  { ico: 'HN',  name: 'Show HN · "Monument" terminal',           host: 'news.ycombinator.com',    tokens: '0.9k', tag: 'thread' },
+];
+(function initContextDrawer(){
+  const drawer = document.getElementById('ctx-drawer');
+  if (!drawer) return;
+  const listEl = document.getElementById('ctx-list');
+  listEl.innerHTML = CONTEXT_ITEMS.map(it => `
+    <div class="ctx-row">
+      <div class="ctx-ico">${it.ico}</div>
+      <div>
+        <div class="ctx-name">${it.name}</div>
+        <div class="ctx-host">${it.host}</div>
+      </div>
+      <div class="ctx-tag${it.accent ? ' accent' : ''}">${it.tag}</div>
+      <div class="ctx-tokens"><b>${it.tokens}</b> tok</div>
+      <div class="ctx-tag">×</div>
+    </div>
+  `).join('');
+  const open  = () => drawer.classList.add('open');
+  const close = () => drawer.classList.remove('open');
+  const tile = document.getElementById('context-folder');
+  if (tile) tile.addEventListener('click', open);
+  drawer.addEventListener('click', e => { if (e.target === drawer) close(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+  ['ctx-clear','ctx-export','ctx-push'].forEach(id => {
+    const b = document.getElementById(id); if (b) b.addEventListener('click', close);
+  });
+})();
+
+/* ---------- REVENANT MANUAL (guide) ---------- */
+const GUIDE_SECTIONS = [
+  { head: 'Primer', items: [
+    { id: 'what',     n: '00', t: 'What Revenant is' },
+    { id: 'ghost',    n: '01', t: 'The ghost lane, explained' },
+    { id: 'identity', n: '02', t: 'Identity shells' },
+  ]},
+  { head: 'Surfaces', items: [
+    { id: 'start',    n: '03', t: 'Start page & speed dial' },
+    { id: 'tabs',     n: '04', t: 'Hex tabs & tab graph' },
+    { id: 'palette',  n: '05', t: 'Command palette (⌘K)' },
+    { id: 'split',    n: '06', t: 'Split view & tiling' },
+    { id: 'copilot',  n: '07', t: 'AI co-pilot sidebar' },
+  ]},
+  { head: 'Systems', items: [
+    { id: 'context',  n: '08', t: 'AI context folders' },
+    { id: 'vault',    n: '09', t: 'Session vaults & sync' },
+    { id: 'governor', n: '10', t: 'Resource governor' },
+    { id: 'radar',    n: '11', t: 'Threat radar & HUD' },
+  ]},
+  { head: 'Connect', items: [
+    { id: 'google',   n: '12', t: 'Import Google account' },
+    { id: 'github',   n: '13', t: 'Bind GitHub' },
+    { id: 'wallet',   n: '14', t: 'MetaMask & Web3' },
+  ]},
+];
+const GUIDE_BODY = {
+  what: {
+    kicker: 'CHAPTER 00 · PRIMER',
+    title: 'What <i>Revenant</i> is',
+    deck: 'A browser that treats every tab as a live agent, not a document. Built for people who read too much, trust too little, and keep a terminal open anyway.',
+    meta: ['WRITTEN BY <b>The Revenant Team</b>', 'UPDATED <b>v4.2.1</b>', 'READ TIME <b>4 MIN</b>'],
+    paras: [
+      'Most browsers are still shaped by the 2004 assumption that you fetch a document, read it, and close it. Revenant assumes the opposite: you are running dozens of long-lived, noisy, stateful surfaces — inbox, IDE, chat, wallet, research — and the browser\'s job is to govern them, not merely paint them.',
+      'Everything in Revenant — hex tabs, ghost lane, context folders, session vaults — exists to give that assumption a home. Nothing is there because "every browser has it."',
+    ],
+    pull: '"If it doesn\'t earn its pixels, it doesn\'t ship."',
+    list: [
+      'Ghost-lane routing on every outbound request',
+      'First-class AI context as a browser primitive',
+      'Resource governor that treats tabs like processes',
+      'No pop-ups, no modals, no dark patterns — ever',
+    ],
+  },
+  ghost: {
+    kicker: 'CHAPTER 01 · NETWORK',
+    title: 'The <i>ghost lane</i>, explained',
+    deck: 'A per-tab egress fabric that mixes your traffic with other Revenant users, so no single site sees a coherent picture of you.',
+    meta: ['LEVEL <b>intermediate</b>', 'PREREQ <b>identity shells</b>', 'READ TIME <b>5 MIN</b>'],
+    paras: [
+      'Every tab opens a ghost lane: a set of relays whose fingerprints — UA, TLS, timezone, viewport — are drawn from a rotating pool. A site cannot correlate two tabs you have open, because the lanes don\'t share fingerprints.',
+      'You can peek at the current lane at any time: click the status dot to the left of the address bar. If it glows pink, traffic is ghosted. If it glows steel, you\'re on the naked wire — by choice.',
+    ],
+    pull: '"The browser should be the one lying to the network. Not you."',
+    list: [
+      'Per-tab fingerprints, not per-profile',
+      'TLS fingerprint randomization via the Revenant relay',
+      'Latency kept within 20ms of the naked wire',
+    ],
+  },
+  identity: {
+    kicker: 'CHAPTER 02 · PRIMER',
+    title: '<i>Identity</i> shells',
+    deck: 'You don\'t have one browser identity. You have as many as you need, and each one is a hard boundary.',
+    meta: ['LEVEL <b>beginner</b>', 'READ TIME <b>3 MIN</b>'],
+    paras: [
+      'A shell is a sealed container: cookies, storage, extensions, logged-in sessions, ghost-lane routing. You can have "Work", "Research", "Throwaway", "Wallet" — each a distinct persona that can never see another\'s state.',
+      'Shells are cheap. Spin one up for a single Google search if you like. The resource governor keeps idle shells frozen so they cost nothing.',
+    ],
+  },
+  start: {
+    kicker: 'CHAPTER 03 · SURFACES',
+    title: 'Start page & <i>speed dial</i>',
+    deck: 'The first thing you see is not ads or "top sites" — it\'s your own command center.',
+    paras: [
+      'The speed dial is composed of three kinds of tiles: pinned sites, connected accounts (Google, GitHub, MetaMask), and Revenant surfaces (context folder, manual, vault). Accounts show a live pulse — unread mail, open PRs, wallet balance — without having to open the tab.',
+      'To rearrange, drag. To reshape, right-click. To live elsewhere, just don\'t open the start page.',
+    ],
+  },
+  tabs: {
+    kicker: 'CHAPTER 04 · SURFACES',
+    title: 'Hex tabs & the <i>tab graph</i>',
+    deck: 'Tabs aren\'t a strip — they\'re a graph. Open a link and a new node sprouts from its parent.',
+    paras: [
+      'Hexagonal tabs were chosen because they tile cleanly across a row and signal clearly which are live, frozen, or ghosted (border color). The graph view (⌘G) shows how you got to where you are — a small antidote to tab amnesia.',
+    ],
+  },
+  palette: {
+    kicker: 'CHAPTER 05 · SURFACES',
+    title: 'Command palette · <i>⌘K</i>',
+    deck: 'Everything the browser can do is one keystroke away. Including things other browsers bury three settings panes deep.',
+    paras: [
+      'The palette is fuzzy-matched, ranked by recent use, and aware of context: in a tab, commands operate on that tab; on the start page, they operate globally. Type "ghost off" to drop the lane; type "split right" to tile; type "push to ai" to ship your context folder to Claude.',
+    ],
+  },
+  split: {
+    kicker: 'CHAPTER 06 · SURFACES',
+    title: '<i>Split</i> view & tiling',
+    deck: 'Drag a tab to a screen edge. Done.',
+    paras: ['Up to four tiles, each its own lane and shell. Resize with the gutter or snap to halves and thirds via ⌘1–⌘4.'],
+  },
+  copilot: {
+    kicker: 'CHAPTER 07 · SURFACES',
+    title: 'AI <i>co-pilot</i> sidebar',
+    deck: 'A panel that sees what you\'re looking at — only if you ask it to.',
+    paras: [
+      'The co-pilot never reads a tab in the background. You summon it with ⌘J; it reads the page you\'re on plus anything in your context folder, then answers. Transcripts are per-tab and disappear when the tab does, unless you pin them.',
+    ],
+  },
+  context: {
+    kicker: 'CHAPTER 08 · SYSTEMS',
+    title: 'AI <i>context</i> folders',
+    deck: 'A bookmark, but for meaning — not navigation.',
+    paras: [
+      'Every tab has a "Save to context" control in the address bar. Click it and the page distills into a chunk: title, canonical URL, a compressed excerpt, and any highlights you made. The folder is a first-class filesystem — you can have many, nest them, share them.',
+      'When you\'re ready, Export → Push to AI memory. Claude, ChatGPT, Gemini, and any local model that reads JSONL will pick it up. You bring your own memory across tools.',
+    ],
+    pull: '"Bookmarks were for finding pages again. Context is for not having to."',
+    list: [
+      'Per-folder token budget, visible at a glance',
+      'Dedupe across sources (same paper, different hosts)',
+      'Write-back: when an AI cites your context, the citation is stored with the chunk',
+    ],
+  },
+  vault: {
+    kicker: 'CHAPTER 09 · SYSTEMS', title: 'Session <i>vaults</i> & sync',
+    deck: 'Freeze any session — tabs, scroll, form state, logged-in cookies — then thaw it anywhere.',
+    paras: ['Vaults are E2E-encrypted and keyed to your Revenant ID. They travel between machines without ever landing on a Revenant server in cleartext.'],
+  },
+  governor: {
+    kicker: 'CHAPTER 10 · SYSTEMS', title: 'Resource <i>governor</i>',
+    deck: 'A tab is a process. Treat it like one.',
+    paras: ['Set memory and CPU ceilings per tab, per domain, or per shell. Offenders are throttled, not killed — you see the brake apply, not a crash.'],
+  },
+  radar: {
+    kicker: 'CHAPTER 11 · SYSTEMS', title: 'Threat <i>radar</i> & HUD',
+    deck: 'A small sweep, lower-right, that maps outbound calls in real time.',
+    paras: ['Dots are third parties. Colors are their reputation. A dot that blinks red just tried something Revenant didn\'t like.'],
+  },
+  google:  { kicker: 'CHAPTER 12 · CONNECT', title: 'Import <i>Google</i> account',
+    deck: 'Essentials in, theme and identity stay local.',
+    paras: ['Mail, passwords, bookmarks, history, contacts, and your news profile mirror over. Theme, shell layout, and any ghost-lane settings remain Revenant-native.'] },
+  github:  { kicker: 'CHAPTER 13 · CONNECT', title: 'Bind <i>GitHub</i>',
+    deck: 'Stars, PRs, and notifications on the start page. Clone through the ghost lane.',
+    paras: ['OAuth flow routes through a sealed shell, so the authorization itself doesn\'t leak your primary fingerprint.'] },
+  wallet:  { kicker: 'CHAPTER 14 · CONNECT', title: '<i>MetaMask</i> & Web3',
+    deck: 'Revenant is a dApp surface — and nothing auto-signs.',
+    paras: ['Every signature pops a per-site confirmation. Chain state caches locally, so explorers load instantly and your RPC provider sees fewer calls.'] },
+};
+(function initGuideDrawer(){
+  const drawer = document.getElementById('guide-drawer');
+  if (!drawer) return;
+  const tocEl = document.getElementById('guide-toc');
+  const bodyEl = document.getElementById('guide-body');
+  const tile = document.getElementById('guide-tile');
+  let current = 'what';
+  const renderToc = () => {
+    tocEl.innerHTML = GUIDE_SECTIONS.map(sec => `
+      <div class="guide-toc-section">${sec.head}</div>
+      ${sec.items.map(it => `
+        <div class="guide-toc-item${it.id === current ? ' active' : ''}" data-id="${it.id}">
+          <span><span class="no">${it.n}</span> · ${it.t}</span>
+        </div>
+      `).join('')}
+    `).join('');
+    tocEl.querySelectorAll('.guide-toc-item').forEach(el => {
+      el.addEventListener('click', () => { current = el.dataset.id; render(); });
+    });
+  };
+  const renderBody = () => {
+    const c = GUIDE_BODY[current] || GUIDE_BODY.what;
+    bodyEl.innerHTML = `
+      <div class="kicker">${c.kicker || ''}</div>
+      <h3>${c.title}</h3>
+      <div class="deck">${c.deck || ''}</div>
+      ${c.meta ? `<div class="meta-row">${c.meta.map(m => `<span>${m}</span>`).join('')}</div>` : ''}
+      ${(c.paras || []).map(p => `<p>${p}</p>`).join('')}
+      ${c.pull ? `<div class="pull">${c.pull}</div>` : ''}
+      ${c.list ? `<ul>${c.list.map(i => `<li>${i}</li>`).join('')}</ul>` : ''}
+    `;
+    bodyEl.scrollTop = 0;
+  };
+  const render = () => { renderToc(); renderBody(); };
+  const open  = () => { render(); drawer.classList.add('open'); };
+  const close = () => drawer.classList.remove('open');
+  if (tile) tile.addEventListener('click', open);
+  drawer.addEventListener('click', e => { if (e.target === drawer) close(); });
+  document.addEventListener('keydown', e => {
+    if (!drawer.classList.contains('open')) return;
+    if (e.key === 'Escape') close();
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+      const flat = GUIDE_SECTIONS.flatMap(s => s.items);
+      const idx = flat.findIndex(i => i.id === current);
+      current = flat[Math.min(idx + 1, flat.length - 1)].id; render();
+    }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+      const flat = GUIDE_SECTIONS.flatMap(s => s.items);
+      const idx = flat.findIndex(i => i.id === current);
+      current = flat[Math.max(idx - 1, 0)].id; render();
+    }
+  });
+})();
+
+/* EDITMODE defaults are stored elsewhere in this file block */
+const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+  "accent": "#ff3864",
+  "tabs": "rail",
+  "vibe": 75,
+  "scanlines": true,
+  "light": true,
+  "vortex": true
+}/*EDITMODE-END*/;
+
+const state = { ...TWEAK_DEFAULTS, screen: 'start' };
+
+/* ---------- VORTEX LOGO ---------- */
+function buildVortex(target, size, layers) {
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('viewBox', `-50 -50 100 100`);
+  const isSmall = size <= 40;
+
+  const outer = document.createElementNS(svgNS, 'g');
+  outer.classList.add('outer-spin');
+  const inner = document.createElementNS(svgNS, 'g');
+  inner.classList.add('inner-spin');
+
+  const hexPoints = (r, rot=0) => {
+    const pts = [];
+    for (let i=0;i<6;i++){
+      const a = (Math.PI/3)*i + rot;
+      pts.push(`${Math.cos(a)*r},${Math.sin(a)*r}`);
+    }
+    return pts.join(' ');
+  };
+
+  for (let i=0;i<layers;i++) {
+    const r = 42 - i * (32/layers);
+    const rot = i * (Math.PI/layers) * 0.6;
+    const opacity = isSmall ? (0.55 + (i/layers) * 0.45) : (0.22 + (i/layers) * 0.6);
+    const poly = document.createElementNS(svgNS, 'polygon');
+    poly.setAttribute('points', hexPoints(r, rot));
+    poly.setAttribute('fill', 'none');
+    poly.setAttribute('stroke', 'currentColor');
+    poly.setAttribute('stroke-width', isSmall ? '1.8' : '0.6');
+    poly.setAttribute('stroke-linejoin', 'round');
+    poly.setAttribute('opacity', opacity);
+    (i % 2 ? outer : inner).appendChild(poly);
+  }
+  svg.appendChild(outer);
+  svg.appendChild(inner);
+  target.innerHTML = '';
+  target.appendChild(svg);
+}
+buildVortex(document.getElementById('brand-mark'), 22, 7);
+buildVortex(document.getElementById('vortex-bg'), 520, 16);
+
+/* ---------- TABS ---------- */
+const TAB_DATA = [
+  { title: 'Revenant · Start', url: 'rev://start', active: true, secure: true, proto: 'REV://' },
+  { title: 'chromium/chromium', url: 'github.com/chromium/chromium', secure: true, proto: 'HTTPS://' },
+  { title: 'Ternary egress study', url: 'arxiv.org/abs/2603.04921', secure: true, proto: 'HTTPS://' },
+  { title: 'Wired · Browser OS', url: 'wired.com/story/...', secure: true, proto: 'HTTPS://' },
+  { title: 'hn', url: 'news.ycombinator.com', secure: true, proto: 'HTTPS://' },
+  { title: '[onion] ahmia', url: 'juhanurmihxlp77...onion', secure: false, proto: 'ONION://' },
+  { title: 'rev://wallet', url: 'rev://wallet/0xA4f9', secure: true, proto: 'REV://' },
+];
+function renderTabs() {
+  const host = document.getElementById('tabs');
+  host.innerHTML = '';
+  TAB_DATA.forEach((t, i) => {
+    const b = document.createElement('button');
+    b.className = 'hex-tab' + (t.active ? ' active' : '') + (t.secure ? ' secure' : '');
+    b.innerHTML = `<span class="tab-dot"></span><span class="tab-title">${t.title}</span><span class="tab-close" title="close">✕</span>`;
+    b.addEventListener('click', (ev) => {
+      if (ev.target.classList.contains('tab-close')) {
+        ev.stopPropagation();
+        const idx = TAB_DATA.indexOf(t);
+        const wasActive = t.active;
+        TAB_DATA.splice(idx, 1);
+        if (wasActive && TAB_DATA.length) {
+          const next = TAB_DATA[Math.min(idx, TAB_DATA.length - 1)];
+          next.active = true;
+          document.getElementById('url').value = next.url;
+          document.getElementById('url-protocol').textContent = next.proto;
+        }
+        renderTabs();
+        return;
+      }
+      TAB_DATA.forEach(x => x.active = false);
+      t.active = true;
+      document.getElementById('url').value = t.url;
+      document.getElementById('url-protocol').textContent = t.proto;
+      renderTabs();
+    });
+    host.appendChild(b);
+  });
+  const n = document.createElement('button');
+  n.className = 'new-tab';
+  n.innerHTML = '+';
+  host.appendChild(n);
+}
+renderTabs();
+document.getElementById('url').value = TAB_DATA[0].url;
+
+/* ---------- TABS STYLE (tweak) ---------- */
+function applyTabsStyle(v) {
+  const host = document.getElementById('tabs');
+  host.querySelectorAll('.hex-tab').forEach(b => {
+    if (v === 'hex') b.style.clipPath = 'polygon(12% 0, 88% 0, 100% 50%, 88% 100%, 12% 100%, 0 50%)';
+    else if (v === 'rail') b.style.clipPath = 'none';
+    else if (v === 'flat') b.style.clipPath = 'polygon(0 0, 100% 0, 95% 100%, 5% 100%)';
+  });
+}
+
+/* ---------- SCREEN ROUTER ---------- */
+const buttons = document.querySelectorAll('[data-screen]');
+const screens = document.querySelectorAll('.screen');
+
+function goTo(id) {
+  state.screen = id;
+  screens.forEach(s => s.classList.toggle('active', s.dataset.screen === id));
+  document.querySelectorAll('.right-rail-btns button[data-screen]').forEach(b => b.classList.toggle('active', b.dataset.screen === id));
+  const labels = {
+    start: 'rev://start',
+    browsing: 'wired.com/story/browser-os',
+    graph: 'rev://graph',
+    split: 'rev://split',
+    copilot: 'arxiv.org/abs/2603.04921',
+    gov: 'rev://governor'
+  };
+  const protos = { start: 'REV://', browsing: 'HTTPS://', graph: 'REV://', split: 'REV://', copilot: 'HTTPS://', gov: 'REV://' };
+  document.getElementById('url').value = labels[id];
+  document.getElementById('url-protocol').textContent = protos[id];
+  try { localStorage.setItem('revenant-screen', id); } catch(e) {}
+}
+document.querySelectorAll('.right-rail-btns button[data-screen]').forEach(b => {
+  b.addEventListener('click', () => goTo(b.dataset.screen));
+});
+try {
+  const saved = localStorage.getItem('revenant-screen');
+  if (saved) goTo(saved);
+} catch (e) {}
+
+/* ---------- COMMAND PALETTE ---------- */
+const cmd = document.getElementById('cmd');
+function openCmd() { cmd.style.display = 'grid'; setTimeout(()=>document.getElementById('cmd-input').focus(), 10); }
+function closeCmd() { cmd.style.display = 'none'; }
+document.getElementById('cmd-btn').addEventListener('click', openCmd);
+cmd.addEventListener('click', e => { if (e.target === cmd) closeCmd(); });
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); openCmd(); }
+  if (e.key === 'Escape') closeCmd();
+});
+
+/* ---------- TAB GRAPH ---------- */
+function buildGraph() {
+  const svg = document.getElementById('graph-svg');
+  const host = document.getElementById('graph-canvas');
+  const nodes = [
+    { id: 'root', x: 200, y: 350, title: 'Hacker News', host: 'news.ycombinator', root: true },
+    { id: 'a', x: 420, y: 200, title: 'The Browser OS', host: 'wired.com' },
+    { id: 'b', x: 420, y: 500, title: 'chromium / chromium', host: 'github.com' },
+    { id: 'c', x: 650, y: 120, title: 'Ternary egress study', host: 'arxiv.org', active: true },
+    { id: 'd', x: 650, y: 260, title: 'Comments · 184', host: 'hn.comments' },
+    { id: 'e', x: 650, y: 430, title: 'net/ · source', host: 'chromium/src' },
+    { id: 'f', x: 650, y: 560, title: 'Blink DOM', host: 'chromium/blink' },
+    { id: 'g', x: 880, y: 80, title: 'PDF', host: 'arxiv/pdf' },
+    { id: 'h', x: 880, y: 180, title: 'Okafor citations', host: 'semanticscholar' },
+    { id: 'i', x: 880, y: 380, title: 'revenant-net diff', host: 'rev://fork' },
+    { id: 'j', x: 880, y: 500, title: 'Sandbox rationale', host: 'chromium.docs' },
+    { id: 'k', x: 1080, y: 140, title: 'Oakland 25 talk', host: 'youtube.com' },
+    { id: 'l', x: 1080, y: 340, title: 'RFC 9000 (QUIC)', host: 'ietf.org' },
+    { id: 'm', x: 1080, y: 500, title: 'Ghost lane spec', host: 'rev://spec' },
+  ];
+  const edges = [
+    ['root','a'],['root','b'],
+    ['a','c'],['a','d'],
+    ['b','e'],['b','f'],
+    ['c','g'],['c','h'],
+    ['e','i'],['e','j'],
+    ['h','k'],['i','l'],['j','m']
+  ];
+  // clear
+  svg.innerHTML = '';
+  host.querySelectorAll('.graph-node').forEach(n => n.remove());
+
+  // edges
+  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
+  edges.forEach(([a,b]) => {
+    const p1 = byId[a], p2 = byId[b];
+    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+    const midx = (p1.x + p2.x)/2;
+    path.setAttribute('d', `M ${p1.x} ${p1.y} C ${midx} ${p1.y} ${midx} ${p2.y} ${p2.x} ${p2.y}`);
+    path.setAttribute('fill','none');
+    path.setAttribute('stroke', p2.active ? 'var(--accent)' : 'var(--line-strong)');
+    path.setAttribute('stroke-width','1');
+    path.setAttribute('stroke-dasharray', p2.active ? '0' : '3 3');
+    svg.appendChild(path);
+  });
+
+  // nodes: need to convert svg space to host px using getBoundingClientRect proportions
+  function pxFromSvg(x, y) {
+    const r = host.getBoundingClientRect();
+    return { px: (x/1200) * r.width, py: (y/700) * r.height };
+  }
+
+  nodes.forEach(n => {
+    const d = document.createElement('div');
+    d.className = 'graph-node' + (n.active ? ' active' : '') + (n.root ? ' root' : '');
+    const { px, py } = pxFromSvg(n.x, n.y);
+    d.style.left = px + 'px';
+    d.style.top = py + 'px';
+    d.innerHTML = `<div class="nh">${n.active ? '<span class="pin"></span>' : ''}<div class="host">${n.host}</div><div class="title">${n.title}</div></div>`;
+    host.appendChild(d);
+  });
+}
+buildGraph();
+window.addEventListener('resize', () => {
+  if (state.screen === 'graph') buildGraph();
+});
+
+/* ---------- CLOCK / FAKE HUD ---------- */
+function tick() {
+  const d = new Date();
+  const t = d.toISOString().substr(11, 8) + ' UTC';
+  const el = document.getElementById('hud-time'); if (el) el.textContent = t;
+  // jitter
+  const cpu = (2 + Math.random()*1.4).toFixed(1);
+  const mem = 300 + Math.floor(Math.random()*30);
+  const net = 14 + Math.floor(Math.random()*10);
+  const fps = 118 + Math.floor(Math.random()*4);
+  document.getElementById('hud-cpu').textContent = cpu + '%';
+  document.getElementById('hud-mem').textContent = mem + 'mb';
+  document.getElementById('hud-net').textContent = net + 'kb/s';
+  document.getElementById('hud-fps').textContent = fps;
+}
+setInterval(tick, 1200); tick();
+
+/* ---------- APPLY SAVED STATE (no-UI) ---------- */
+function setAccent(c) {
+  state.accent = c;
+  document.documentElement.style.setProperty('--accent', c);
+  document.documentElement.style.setProperty('--accent-dim', c + '22');
+  document.documentElement.style.setProperty('--accent-glow', c + '40');
+}
+
+(function init() {
+  setAccent(state.accent);
+  applyTabsStyle(state.tabs);
+  document.documentElement.style.setProperty('--scanline-opacity', (state.vibe/100 * 0.14).toFixed(3));
+  document.documentElement.style.setProperty('--vortex-speed', (90 - state.vibe*0.7) + 's');
+  if (!state.scanlines) document.getElementById('scanlines').classList.add('off');
+  if (state.light) document.documentElement.classList.add('light');
+  else document.documentElement.classList.add('dark-on');
+  if (!state.vortex) {
+    document.querySelectorAll('.inner-spin, .outer-spin').forEach(el => {
+      el.style.animationPlayState = 'paused';
+    });
+  }
+})();
+
+</script>
+</body>
+</html>

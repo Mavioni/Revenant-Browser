@@ -1,0 +1,53 @@
+{
+  "name": "revenant-browser",
+  "version": "0.1.0",
+  "description": "Revenant Browser — a browser that haunts the network. Sovereign, local-first, ternary-principled desktop shell with AI-assisted tool routing via OpenClaw. Hexagonal-vortex aesthetic.",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build:ts": "tsc",
+    "start": "npm run build:ts && electron .",
+    "dev": "npm run build:ts && electron .",
+    "dist": "npm run build:ts && electron-builder",
+    "rebuild": "npx @electron/rebuild"
+  },
+  "keywords": [
+    "browser",
+    "electron",
+    "local-first",
+    "ternary",
+    "ai",
+    "revenant"
+  ],
+  "author": "Mavioni",
+  "license": "MIT",
+  "type": "commonjs",
+  "build": {
+    "appId": "dev.mavioni.revenant-browser",
+    "productName": "Revenant Browser",
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64", "arm64"] }
+      ],
+      "icon": "resources/icon.ico"
+    },
+    "files": [
+      "dist/**/*",
+      "src/renderer/**/*",
+      "python/**/*",
+      "!python/.venv/**/*"
+    ],
+    "extraResources": [
+      { "from": "resources", "to": "." }
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.0",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {}
+}

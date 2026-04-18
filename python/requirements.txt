@@ -1,0 +1,12 @@
+-e ../agent-s_repo
+pyautogui
+pillow
+requests
+flask
+airllm
+pytesseract
+transformers
+accelerate
+numpy
+soundfile
+kokoro>=0.9.4

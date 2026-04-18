@@ -1,0 +1,30 @@
+# Node
+node_modules/
+npm-debug.log
+package-lock.json
+
+# TypeScript build output
+dist/
+
+# Electron-builder output
+release/
+
+# Python venv (speech worker — 1.5GB)
+python/.venv/
+python/__pycache__/
+python/*.pyc
+
+# Secrets / local config
+.env
+.env.local
+*.local.json
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
