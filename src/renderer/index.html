@@ -156,7 +156,9 @@
     --hex-w: 140px;
     --hex-h: 32px;
     position: relative;
-    width: var(--hex-w);
+    flex: 1 1 var(--hex-w);
+    min-width: 48px;
+    max-width: var(--hex-w);
     height: var(--hex-h);
     margin-right: -10px;
     clip-path: polygon(12% 0, 88% 0, 100% 50%, 88% 100%, 12% 100%, 0 50%);
@@ -167,7 +169,6 @@
     color: var(--text-1);
     cursor: pointer;
     transition: background 120ms ease, color 120ms ease;
-    flex-shrink: 0;
     overflow: hidden;
     border: 0;
   }
@@ -216,7 +217,34 @@
     font-size: 7px; color: var(--accent);
   }
 
+  /* Tab context menu (right-click) */
+  .tab-ctx-menu {
+    position: fixed; z-index: 9999;
+    background: var(--bg-2); color: var(--text-0);
+    border: 1px solid var(--bg-3);
+    border-radius: 4px;
+    padding: 4px 0;
+    min-width: 200px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    user-select: none;
+  }
+  .tab-ctx-menu .ctx-item {
+    padding: 6px 14px;
+    cursor: pointer;
+    color: var(--text-1);
+  }
+  .tab-ctx-menu .ctx-item:hover {
+    background: var(--accent); color: var(--bg-0);
+  }
+  .tab-ctx-menu .ctx-sep {
+    height: 1px; margin: 4px 0; background: var(--bg-3);
+  }
+
   .new-tab {
+    flex: 0 0 auto;
     width: 32px; height: 32px; align-self: flex-end;
     display: grid; place-items: center;
     color: var(--text-2);
@@ -3088,53 +3116,155 @@ function buildVortex(target, size, layers) {
 buildVortex(document.getElementById('brand-mark'), 22, 7);
 buildVortex(document.getElementById('vortex-bg'), 520, 16);
 
-/* ---------- TABS ---------- */
-const TAB_DATA = [
-  { title: 'Revenant · Start', url: 'rev://start', active: true, secure: true, proto: 'REV://' },
-  { title: 'chromium/chromium', url: 'github.com/chromium/chromium', secure: true, proto: 'HTTPS://' },
-  { title: 'Ternary egress study', url: 'arxiv.org/abs/2603.04921', secure: true, proto: 'HTTPS://' },
-  { title: 'Wired · Browser OS', url: 'wired.com/story/...', secure: true, proto: 'HTTPS://' },
-  { title: 'hn', url: 'news.ycombinator.com', secure: true, proto: 'HTTPS://' },
-  { title: '[onion] ahmia', url: 'juhanurmihxlp77...onion', secure: false, proto: 'ONION://' },
-  { title: 'rev://wallet', url: 'rev://wallet/0xA4f9', secure: true, proto: 'REV://' },
-];
+/* ---------- TABS (live, driven by window.revenant.tabs) ---------- */
+const tabsBridge = (window).revenant && (window).revenant.tabs;
+
+function escapeText(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+function tabDisplay(tab) {
+  const title = (tab.title && tab.title.trim()) || (tab.url && new URL(tab.url).hostname) || 'new tab';
+  return title;
+}
+
+function dismissCtxMenu() {
+  const existing = document.querySelector('.tab-ctx-menu');
+  if (existing) existing.remove();
+}
+
+function showTabContextMenu(tab, clientX, clientY) {
+  dismissCtxMenu();
+  if (!tabsBridge) return;
+  const menu = document.createElement('div');
+  menu.className = 'tab-ctx-menu';
+  menu.style.left = clientX + 'px';
+  menu.style.top = clientY + 'px';
+  const items = [
+    { label: 'Reshuffle Identity', action: () => tabsBridge.reshuffleIdentity(tab.id) },
+    { label: 'New Tab from Here', action: () => tabsBridge.create({ parentTabId: tab.id }) },
+    { sep: true },
+    { label: 'Close Tab', action: () => tabsBridge.close(tab.id) },
+  ];
+  items.forEach((it) => {
+    if (it.sep) {
+      const s = document.createElement('div');
+      s.className = 'ctx-sep';
+      menu.appendChild(s);
+      return;
+    }
+    const el = document.createElement('div');
+    el.className = 'ctx-item';
+    el.textContent = it.label;
+    el.addEventListener('click', () => {
+      try { it.action(); } catch (_) { /* noop */ }
+      dismissCtxMenu();
+    });
+    menu.appendChild(el);
+  });
+  document.body.appendChild(menu);
+  // Clip to viewport
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 8) + 'px';
+  if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 8) + 'px';
+}
+
+document.addEventListener('click', dismissCtxMenu);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') dismissCtxMenu(); });
+
+let currentTabs = [];
+let currentActiveId = null;
+
 function renderTabs() {
   const host = document.getElementById('tabs');
+  if (!host) return;
   host.innerHTML = '';
-  TAB_DATA.forEach((t, i) => {
+
+  currentTabs.forEach((t) => {
     const b = document.createElement('button');
-    b.className = 'hex-tab' + (t.active ? ' active' : '') + (t.secure ? ' secure' : '');
-    b.innerHTML = `<span class="tab-dot"></span><span class="tab-title">${t.title}</span><span class="tab-close" title="close">✕</span>`;
+    const isActive = t.id === currentActiveId;
+    const isSecure = (t.url || '').startsWith('https://');
+    b.className = 'hex-tab' + (isActive ? ' active' : '') + (isSecure ? ' secure' : '');
+    b.dataset.tabId = t.id;
+    b.title = t.url || '';
+    b.innerHTML =
+      '<span class="tab-dot"></span>' +
+      '<span class="tab-title">' + escapeText(tabDisplay(t)) + '</span>' +
+      '<span class="tab-close" title="close">✕</span>';
+
     b.addEventListener('click', (ev) => {
       if (ev.target.classList.contains('tab-close')) {
         ev.stopPropagation();
-        const idx = TAB_DATA.indexOf(t);
-        const wasActive = t.active;
-        TAB_DATA.splice(idx, 1);
-        if (wasActive && TAB_DATA.length) {
-          const next = TAB_DATA[Math.min(idx, TAB_DATA.length - 1)];
-          next.active = true;
-          document.getElementById('url').value = next.url;
-          document.getElementById('url-protocol').textContent = next.proto;
-        }
-        renderTabs();
+        if (tabsBridge) tabsBridge.close(t.id);
         return;
       }
-      TAB_DATA.forEach(x => x.active = false);
-      t.active = true;
-      document.getElementById('url').value = t.url;
-      document.getElementById('url-protocol').textContent = t.proto;
-      renderTabs();
+      if (tabsBridge) tabsBridge.switch(t.id);
     });
+
+    b.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      showTabContextMenu(t, ev.clientX, ev.clientY);
+    });
+
     host.appendChild(b);
   });
-  const n = document.createElement('button');
-  n.className = 'new-tab';
-  n.innerHTML = '+';
-  host.appendChild(n);
+
+  const plus = document.createElement('button');
+  plus.className = 'new-tab';
+  plus.title = 'New tab (Ctrl+T)';
+  plus.innerHTML = '+';
+  plus.addEventListener('click', () => {
+    if (tabsBridge) tabsBridge.create({});
+  });
+  host.appendChild(plus);
+
+  // Re-apply current tab-shape style to the freshly rendered buttons
+  if (typeof applyTabsStyle === 'function' && state && state.tabs) {
+    applyTabsStyle(state.tabs);
+  }
 }
-renderTabs();
-document.getElementById('url').value = TAB_DATA[0].url;
+
+// Seed from main process + subscribe to updates
+if (tabsBridge) {
+  tabsBridge.list().then((list) => { currentTabs = list || []; renderTabs(); }).catch(() => undefined);
+  tabsBridge.active().then((active) => { currentActiveId = active ? active.id : null; renderTabs(); }).catch(() => undefined);
+  tabsBridge.onListUpdated((list) => { currentTabs = list || []; renderTabs(); });
+  tabsBridge.onActiveChanged((active) => { currentActiveId = active ? active.id : null; renderTabs(); });
+  tabsBridge.onNavUpdated((tab) => {
+    const idx = currentTabs.findIndex((t) => t.id === tab.id);
+    if (idx >= 0) { currentTabs[idx] = tab; renderTabs(); }
+  });
+} else {
+  // Fallback: we're opened as file:// without the preload — render a placeholder
+  renderTabs();
+}
+
+// Keyboard shortcuts — Ctrl+T new, Ctrl+W close active, Ctrl+Tab next, Ctrl+Shift+Tab prev
+document.addEventListener('keydown', (e) => {
+  if (!tabsBridge) return;
+  const ctrl = e.ctrlKey || e.metaKey;
+  if (ctrl && !e.shiftKey && e.key.toLowerCase() === 't') {
+    e.preventDefault();
+    tabsBridge.create({});
+  } else if (ctrl && !e.shiftKey && e.key.toLowerCase() === 'w') {
+    e.preventDefault();
+    if (currentActiveId) tabsBridge.close(currentActiveId);
+  } else if (ctrl && !e.shiftKey && e.key === 'Tab') {
+    e.preventDefault();
+    if (!currentTabs.length) return;
+    const i = currentTabs.findIndex((t) => t.id === currentActiveId);
+    const next = currentTabs[(i + 1) % currentTabs.length];
+    if (next) tabsBridge.switch(next.id);
+  } else if (ctrl && e.shiftKey && e.key === 'Tab') {
+    e.preventDefault();
+    if (!currentTabs.length) return;
+    const i = currentTabs.findIndex((t) => t.id === currentActiveId);
+    const prev = currentTabs[(i - 1 + currentTabs.length) % currentTabs.length];
+    if (prev) tabsBridge.switch(prev.id);
+  }
+});
 
 /* ---------- TABS STYLE (tweak) ---------- */
 function applyTabsStyle(v) {

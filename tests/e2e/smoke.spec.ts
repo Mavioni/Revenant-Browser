@@ -148,7 +148,7 @@ test('preload bridge exposes window.revenant.browser surface', async () => {
   });
 
   expect(shape).not.toBeNull();
-  expect(shape).toEqual({
+  expect(shape!).toMatchObject({
     hasNavigate: true,
     hasBack: true,
     hasForward: true,
@@ -157,4 +157,80 @@ test('preload bridge exposes window.revenant.browser surface', async () => {
     hasGetState: true,
     hasOnNavUpdated: true,
   });
+});
+
+test('window.revenant.tabs surface exposes full tab namespace', async () => {
+  const shape = await win.evaluate(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const t = w.revenant?.tabs;
+    if (!t) return null;
+    return {
+      hasList: typeof t.list === 'function',
+      hasActive: typeof t.active === 'function',
+      hasCreate: typeof t.create === 'function',
+      hasSwitch: typeof t.switch === 'function',
+      hasClose: typeof t.close === 'function',
+      hasNavigate: typeof t.navigate === 'function',
+      hasReshuffleIdentity: typeof t.reshuffleIdentity === 'function',
+      hasSetEgressLane: typeof t.setEgressLane === 'function',
+      hasGraphSnapshot: typeof t.graphSnapshot === 'function',
+      hasOnListUpdated: typeof t.onListUpdated === 'function',
+      hasOnActiveChanged: typeof t.onActiveChanged === 'function',
+      hasOnNavUpdated: typeof t.onNavUpdated === 'function',
+      hasOnGraphUpdated: typeof t.onGraphUpdated === 'function',
+    };
+  });
+  expect(shape).not.toBeNull();
+  expect(shape!).toMatchObject({
+    hasList: true, hasActive: true, hasCreate: true, hasSwitch: true, hasClose: true,
+    hasNavigate: true, hasReshuffleIdentity: true, hasSetEgressLane: true,
+    hasGraphSnapshot: true, hasOnListUpdated: true, hasOnActiveChanged: true,
+    hasOnNavUpdated: true, hasOnGraphUpdated: true,
+  });
+});
+
+test('tabs.create → tabs.list round-trip; tabs.close removes the tab', async () => {
+  const list0 = await win.evaluate(() => (window as any).revenant.tabs.list());
+  const initialCount = Array.isArray(list0) ? list0.length : 0;
+
+  const created = await win.evaluate(() =>
+    (window as any).revenant.tabs.create({ url: 'https://example.com/' }),
+  );
+  expect(created).toBeTruthy();
+  expect(typeof created.id).toBe('string');
+  expect(created.id.length).toBeGreaterThan(0);
+
+  const list1 = await win.evaluate(() => (window as any).revenant.tabs.list());
+  expect(Array.isArray(list1)).toBe(true);
+  expect(list1.length).toBe(initialCount + 1);
+  expect(list1.some((t: { id: string }) => t.id === created.id)).toBe(true);
+
+  const closed = await win.evaluate((id) => (window as any).revenant.tabs.close(id), created.id);
+  expect(closed).toMatchObject({ ok: true, closedId: created.id });
+
+  const list2 = await win.evaluate(() => (window as any).revenant.tabs.list());
+  expect(list2.length).toBe(initialCount);
+  expect(list2.some((t: { id: string }) => t.id === created.id)).toBe(false);
+});
+
+test('tabs.reshuffleIdentity returns a fresh identity shell', async () => {
+  const created = await win.evaluate(() =>
+    (window as any).revenant.tabs.create({ url: 'https://example.com/' }),
+  );
+  const firstUA = created.identityShell.userAgent;
+
+  // Reshuffle until UA changes (pool has 5 options — 4/5 odds each try)
+  let reshuffled = created;
+  for (let i = 0; i < 8; i += 1) {
+    reshuffled = await win.evaluate(
+      (id) => (window as any).revenant.tabs.reshuffleIdentity(id),
+      created.id,
+    );
+    if (reshuffled.identityShell.userAgent !== firstUA) break;
+  }
+  expect(reshuffled.identityShell.userAgent).not.toBe(firstUA);
+
+  // Clean up
+  await win.evaluate((id) => (window as any).revenant.tabs.close(id), created.id);
 });

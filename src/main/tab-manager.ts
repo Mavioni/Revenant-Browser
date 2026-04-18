@@ -312,9 +312,10 @@ export class TabManager {
     if (wasActive) this.detachActive();
 
     target.state = 'closed';
-    try {
-      target.view.webContents.close();
-    } catch { /* noop */ }
+    // Detach-only — don't call webContents.close(), which can block on
+    // beforeunload handlers in the guest page and hang app teardown.
+    // The view reference is released when the tab is dropped from the map
+    // via dispose() at app quit; Electron GC handles the rest.
 
     let newActiveId: string | null = null;
     if (wasActive) {
@@ -450,9 +451,9 @@ export class TabManager {
 
   dispose(): void {
     this.detachActive();
-    for (const tab of this.tabs.values()) {
-      try { tab.view.webContents.close(); } catch { /* noop */ }
-    }
+    // Don't call webContents.close() during teardown — it can block on
+    // beforeunload handlers. The main window destruction + app quit lets
+    // Electron reap the views.
     this.tabs.clear();
     this.activeTabId = null;
   }

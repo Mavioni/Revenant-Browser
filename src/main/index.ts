@@ -370,8 +370,8 @@ async function initialize(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
-  await initialize();
   createWindow();
+  await initialize();
   if (mainWindow) {
     tray = setupTray(mainWindow, getResourcePath('icon.ico'));
   }
