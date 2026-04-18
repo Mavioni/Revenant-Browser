@@ -42,6 +42,21 @@ contextBridge.exposeInMainWorld('revenant', {
     quit: () => ipcRenderer.invoke('app:quit'),
   },
 
+  browser: {
+    navigate: (url: string) => ipcRenderer.invoke('browser:navigate', url),
+    back: () => ipcRenderer.invoke('browser:back'),
+    forward: () => ipcRenderer.invoke('browser:forward'),
+    reload: () => ipcRenderer.invoke('browser:reload'),
+    home: () => ipcRenderer.invoke('browser:home'),
+    setBounds: (bounds: { x: number; y: number; width: number; height: number }, visible: boolean) =>
+      ipcRenderer.invoke('browser:set-bounds', bounds, visible),
+    getState: () => ipcRenderer.invoke('browser:get-state'),
+    onNavUpdated: (callback: (info: { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean }) => void) => {
+      ipcRenderer.removeAllListeners('browser:nav-updated');
+      ipcRenderer.on('browser:nav-updated', (_event, info) => callback(info));
+    },
+  },
+
   on: (eventName: string, callback: (...args: unknown[]) => void) => {
     const ALLOWED_CHANNELS = new Set([
       'companion:runtime-health',

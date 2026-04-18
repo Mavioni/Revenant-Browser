@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, dialog, desktopCapturer } from 'electron';
+import { app, BrowserWindow, WebContentsView, ipcMain, Tray, Menu, desktopCapturer } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { setupTray } from './tray';
@@ -18,6 +18,12 @@ let companionStore: CompanionStore;
 let runtimeSupervisor: RuntimeSupervisor;
 let speechService: SpeechService;
 let openClawClient: OpenClawGatewayClient;
+
+let browserView: WebContentsView | null = null;
+let browserViewAttached = false;
+let browserViewBounds = { x: 0, y: 0, width: 0, height: 0 };
+
+const NAV_HOME_URL = 'https://duckduckgo.com/';
 let speechResetTimer: ReturnType<typeof setTimeout> | null = null;
 
 const VALID_PERMISSION_TIERS: PermissionTier[] = [
@@ -120,6 +126,66 @@ function createWindow(): void {
 
 function broadcastCompanionEvent(channel: string, payload: unknown): void {
   mainWindow?.webContents.send(channel, payload);
+}
+
+function emitBrowserNav(): void {
+  if (!browserView || !mainWindow) return;
+  const wc = browserView.webContents;
+  mainWindow.webContents.send('browser:nav-updated', {
+    url: wc.getURL(),
+    title: wc.getTitle(),
+    canGoBack: wc.navigationHistory?.canGoBack?.() ?? false,
+    canGoForward: wc.navigationHistory?.canGoForward?.() ?? false,
+    loading: wc.isLoading(),
+  });
+}
+
+function createBrowserView(): WebContentsView {
+  const view = new WebContentsView({
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  const wc = view.webContents;
+  wc.on('did-navigate', emitBrowserNav);
+  wc.on('did-navigate-in-page', emitBrowserNav);
+  wc.on('did-start-loading', emitBrowserNav);
+  wc.on('did-stop-loading', emitBrowserNav);
+  wc.on('page-title-updated', emitBrowserNav);
+
+  // Respect target=_blank by routing to the same view for now
+  wc.setWindowOpenHandler(({ url }) => {
+    wc.loadURL(url).catch(() => undefined);
+    return { action: 'deny' };
+  });
+
+  return view;
+}
+
+function attachBrowserView(): void {
+  if (!browserView || !mainWindow || browserViewAttached) return;
+  mainWindow.contentView.addChildView(browserView);
+  browserView.setBounds(browserViewBounds);
+  browserViewAttached = true;
+}
+
+function detachBrowserView(): void {
+  if (!browserView || !mainWindow || !browserViewAttached) return;
+  mainWindow.contentView.removeChildView(browserView);
+  browserViewAttached = false;
+}
+
+function normalizeUrl(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return NAV_HOME_URL;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
+  // Simple search-vs-url heuristic: contains a dot + no space = URL; otherwise search
+  if (/\s/.test(trimmed) || !/\./.test(trimmed)) {
+    return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`;
+  }
+  return `https://${trimmed}`;
 }
 
 async function initialize(): Promise<void> {
@@ -241,6 +307,64 @@ async function initialize(): Promise<void> {
       : await openClawClient.executeTool(title, tier, reason, command);
     companionStore.recordExecution(pending, result);
     return result;
+  });
+
+  // Browsing engine — WebContentsView attached under the design's chrome
+  browserView = createBrowserView();
+
+  ipcMain.handle('browser:navigate', async (_event, url: string) => {
+    if (!browserView) return { ok: false, error: 'view-not-ready' };
+    const resolved = normalizeUrl(url);
+    try {
+      await browserView.webContents.loadURL(resolved);
+      emitBrowserNav();
+      return { ok: true, url: resolved };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), url: resolved };
+    }
+  });
+
+  ipcMain.handle('browser:back', () => {
+    const wc = browserView?.webContents;
+    if (wc?.navigationHistory?.canGoBack?.()) wc.navigationHistory.goBack();
+  });
+  ipcMain.handle('browser:forward', () => {
+    const wc = browserView?.webContents;
+    if (wc?.navigationHistory?.canGoForward?.()) wc.navigationHistory.goForward();
+  });
+  ipcMain.handle('browser:reload', () => browserView?.webContents.reload());
+  ipcMain.handle('browser:home', async () => {
+    if (!browserView) return;
+    await browserView.webContents.loadURL(NAV_HOME_URL);
+    emitBrowserNav();
+  });
+
+  ipcMain.handle('browser:set-bounds', (_event, bounds: { x: number; y: number; width: number; height: number }, visible: boolean) => {
+    browserViewBounds = {
+      x: Math.max(0, Math.round(bounds.x)),
+      y: Math.max(0, Math.round(bounds.y)),
+      width: Math.max(0, Math.round(bounds.width)),
+      height: Math.max(0, Math.round(bounds.height)),
+    };
+    if (visible && browserViewBounds.width > 0 && browserViewBounds.height > 0) {
+      attachBrowserView();
+      browserView?.setBounds(browserViewBounds);
+    } else {
+      detachBrowserView();
+    }
+    return { ok: true };
+  });
+
+  ipcMain.handle('browser:get-state', () => {
+    if (!browserView) return null;
+    const wc = browserView.webContents;
+    return {
+      url: wc.getURL(),
+      title: wc.getTitle(),
+      canGoBack: wc.navigationHistory?.canGoBack?.() ?? false,
+      canGoForward: wc.navigationHistory?.canGoForward?.() ?? false,
+      loading: wc.isLoading(),
+    };
   });
 
   // Config
