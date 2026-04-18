@@ -97,14 +97,24 @@ export class SpeechService {
 
     const workerPath = path.join(this.pythonDir, 'lelu_speech_worker.py');
     const pythonExecutable = this.resolvePythonExecutable();
+    // Pass a minimal env allowlist — never forward the full process.env, which
+    // can contain secrets (OPENCLAW_GATEWAY_TOKEN, API keys, etc.).
+    const scopedEnv: Record<string, string> = {
+      HF_HUB_DISABLE_TELEMETRY: '1',
+      PYTHONIOENCODING: 'utf-8',
+    };
+    const hostPath = process.env.PATH || process.env.Path || process.env.path;
+    if (hostPath) scopedEnv.PATH = hostPath;
+    for (const k of ['SYSTEMROOT','USERPROFILE','LOCALAPPDATA','APPDATA','TEMP','TMP','HOME','HF_HOME','TRANSFORMERS_CACHE','TORCH_HOME']) {
+      const v = process.env[k];
+      if (v) scopedEnv[k] = v;
+    }
+
     const worker = spawn(pythonExecutable, [workerPath], {
       cwd: this.pythonDir,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
-      env: {
-        ...process.env,
-        HF_HUB_DISABLE_TELEMETRY: '1',
-      },
+      env: scopedEnv,
     });
 
     worker.stderr?.on('data', (chunk: Buffer) => {

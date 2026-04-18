@@ -52,8 +52,9 @@ contextBridge.exposeInMainWorld('revenant', {
       ipcRenderer.invoke('browser:set-bounds', bounds, visible),
     getState: () => ipcRenderer.invoke('browser:get-state'),
     onNavUpdated: (callback: (info: { url: string; title: string; canGoBack: boolean; canGoForward: boolean; loading: boolean }) => void) => {
-      ipcRenderer.removeAllListeners('browser:nav-updated');
-      ipcRenderer.on('browser:nav-updated', (_event, info) => callback(info));
+      const listener = (_event: unknown, info: unknown) => callback(info as Parameters<typeof callback>[0]);
+      ipcRenderer.on('browser:nav-updated', listener);
+      return () => ipcRenderer.removeListener('browser:nav-updated', listener);
     },
   },
 

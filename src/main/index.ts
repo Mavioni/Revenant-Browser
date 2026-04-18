@@ -6,6 +6,7 @@ import { CompanionStore } from './companion-store';
 import { RuntimeSupervisor } from './runtime-supervisor';
 import { SpeechService } from './speech-service';
 import { OpenClawGatewayClient } from './openclaw-client';
+import { NAV_HOME_URL, normalizeUrl, safeWindowOpenUrl } from './url-utils';
 import {
   ExecutionResult,
   PermissionTier,
@@ -23,7 +24,8 @@ let browserView: WebContentsView | null = null;
 let browserViewAttached = false;
 let browserViewBounds = { x: 0, y: 0, width: 0, height: 0 };
 
-const NAV_HOME_URL = 'https://duckduckgo.com/';
+// Keys in the config that must NEVER be exposed to the renderer.
+const SENSITIVE_CONFIG_KEYS = new Set(['leluGitHubToken']);
 let speechResetTimer: ReturnType<typeof setTimeout> | null = null;
 
 const VALID_PERMISSION_TIERS: PermissionTier[] = [
@@ -107,6 +109,8 @@ function createWindow(): void {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
     },
     show: false,
   });
@@ -155,9 +159,10 @@ function createBrowserView(): WebContentsView {
   wc.on('did-stop-loading', emitBrowserNav);
   wc.on('page-title-updated', emitBrowserNav);
 
-  // Respect target=_blank by routing to the same view for now
+  // Respect target=_blank by routing to the same view — but only for safe schemes.
   wc.setWindowOpenHandler(({ url }) => {
-    wc.loadURL(url).catch(() => undefined);
+    const safe = safeWindowOpenUrl(url);
+    if (safe) wc.loadURL(safe).catch(() => undefined);
     return { action: 'deny' };
   });
 
@@ -177,15 +182,16 @@ function detachBrowserView(): void {
   browserViewAttached = false;
 }
 
-function normalizeUrl(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return NAV_HOME_URL;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return trimmed;
-  // Simple search-vs-url heuristic: contains a dot + no space = URL; otherwise search
-  if (/\s/.test(trimmed) || !/\./.test(trimmed)) {
-    return `https://duckduckgo.com/?q=${encodeURIComponent(trimmed)}`;
+function scrubConfigForRenderer(config: Record<string, unknown>): Record<string, unknown> {
+  const scrubbed: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (SENSITIVE_CONFIG_KEYS.has(key)) {
+      scrubbed[key] = typeof value === 'string' && value.length > 0 ? '<set>' : '';
+    } else {
+      scrubbed[key] = value;
+    }
   }
-  return `https://${trimmed}`;
+  return scrubbed;
 }
 
 async function initialize(): Promise<void> {
@@ -257,7 +263,7 @@ async function initialize(): Promise<void> {
     };
   });
 
-  ipcMain.handle('vision:analyze', async () => {
+  ipcMain.handle('vision:analyze', async (_event, _request: unknown) => {
     return { status: 'not-implemented', note: 'VLM analyze endpoint is scoped for a later phase.' };
   });
 
@@ -326,11 +332,19 @@ async function initialize(): Promise<void> {
 
   ipcMain.handle('browser:back', () => {
     const wc = browserView?.webContents;
-    if (wc?.navigationHistory?.canGoBack?.()) wc.navigationHistory.goBack();
+    if (wc?.navigationHistory?.canGoBack?.()) {
+      wc.navigationHistory.goBack();
+      return { ok: true, navigated: true };
+    }
+    return { ok: true, navigated: false };
   });
   ipcMain.handle('browser:forward', () => {
     const wc = browserView?.webContents;
-    if (wc?.navigationHistory?.canGoForward?.()) wc.navigationHistory.goForward();
+    if (wc?.navigationHistory?.canGoForward?.()) {
+      wc.navigationHistory.goForward();
+      return { ok: true, navigated: true };
+    }
+    return { ok: true, navigated: false };
   });
   ipcMain.handle('browser:reload', () => browserView?.webContents.reload());
   ipcMain.handle('browser:home', async () => {
@@ -367,11 +381,12 @@ async function initialize(): Promise<void> {
     };
   });
 
-  // Config
-  ipcMain.handle('config:get', () => getConfig());
+  // Config — scrub sensitive keys before returning to renderer.
+  // Main process reads unscrubbed via getConfig() internally.
+  ipcMain.handle('config:get', () => scrubConfigForRenderer(getConfig()));
   ipcMain.handle('config:set', (_event, key: string, value: unknown) => {
     setConfig(key, value);
-    return getConfig();
+    return scrubConfigForRenderer(getConfig());
   });
 
   // App
