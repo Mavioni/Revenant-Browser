@@ -8,7 +8,12 @@
     "start": "npm run build:ts && electron .",
     "dev": "npm run build:ts && electron .",
     "dist": "npm run build:ts && electron-builder",
-    "rebuild": "npx @electron/rebuild"
+    "rebuild": "npx @electron/rebuild",
+    "test": "npm run test:unit",
+    "test:unit": "vitest run --config tests/vitest.config.ts",
+    "test:unit:watch": "vitest --config tests/vitest.config.ts",
+    "test:e2e": "playwright test --config=tests/playwright.config.ts",
+    "pretest:e2e": "npm run build:ts"
   },
   "keywords": [
     "browser",
@@ -44,10 +49,14 @@
     ]
   },
   "devDependencies": {
+    "@playwright/test": "^1.47.0",
     "@types/node": "^22.10.0",
     "electron": "^33.0.0",
     "electron-builder": "^25.1.0",
-    "typescript": "^5.6.0"
+    "playwright": "^1.47.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
   },
   "dependencies": {}
 }
