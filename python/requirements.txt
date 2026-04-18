@@ -1,12 +1,11 @@
--e ../agent-s_repo
-pyautogui
-pillow
-requests
-flask
-airllm
-pytesseract
+# Revenant Browser — speech worker deps (Python 3.12)
+#
+# Kokoro pins python<3.13, so this venv MUST be provisioned with py -3.12.
+# Create: cd python && py -3.12 -m venv .venv && .venv\Scripts\python -m pip install -r requirements.txt
+
 transformers
 accelerate
+torch
 numpy
 soundfile
 kokoro>=0.9.4
