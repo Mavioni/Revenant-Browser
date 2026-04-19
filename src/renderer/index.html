@@ -3308,71 +3308,159 @@ document.addEventListener('keydown', e => {
 });
 
 /* ---------- TAB GRAPH ---------- */
-function buildGraph() {
+/* ---------- TAB GRAPH (live, driven by window.revenant.tabs) ---------- */
+(function initTabGraph() {
+  const bridge = window.revenant && window.revenant.tabs;
   const svg = document.getElementById('graph-svg');
   const host = document.getElementById('graph-canvas');
-  const nodes = [
-    { id: 'root', x: 200, y: 350, title: 'Hacker News', host: 'news.ycombinator', root: true },
-    { id: 'a', x: 420, y: 200, title: 'The Browser OS', host: 'wired.com' },
-    { id: 'b', x: 420, y: 500, title: 'chromium / chromium', host: 'github.com' },
-    { id: 'c', x: 650, y: 120, title: 'Ternary egress study', host: 'arxiv.org', active: true },
-    { id: 'd', x: 650, y: 260, title: 'Comments · 184', host: 'hn.comments' },
-    { id: 'e', x: 650, y: 430, title: 'net/ · source', host: 'chromium/src' },
-    { id: 'f', x: 650, y: 560, title: 'Blink DOM', host: 'chromium/blink' },
-    { id: 'g', x: 880, y: 80, title: 'PDF', host: 'arxiv/pdf' },
-    { id: 'h', x: 880, y: 180, title: 'Okafor citations', host: 'semanticscholar' },
-    { id: 'i', x: 880, y: 380, title: 'revenant-net diff', host: 'rev://fork' },
-    { id: 'j', x: 880, y: 500, title: 'Sandbox rationale', host: 'chromium.docs' },
-    { id: 'k', x: 1080, y: 140, title: 'Oakland 25 talk', host: 'youtube.com' },
-    { id: 'l', x: 1080, y: 340, title: 'RFC 9000 (QUIC)', host: 'ietf.org' },
-    { id: 'm', x: 1080, y: 500, title: 'Ghost lane spec', host: 'rev://spec' },
-  ];
-  const edges = [
-    ['root','a'],['root','b'],
-    ['a','c'],['a','d'],
-    ['b','e'],['b','f'],
-    ['c','g'],['c','h'],
-    ['e','i'],['e','j'],
-    ['h','k'],['i','l'],['j','m']
-  ];
-  // clear
-  svg.innerHTML = '';
-  host.querySelectorAll('.graph-node').forEach(n => n.remove());
+  const stats = document.querySelector('.graph-stats');
+  if (!svg || !host) return;
 
-  // edges
-  const byId = Object.fromEntries(nodes.map(n => [n.id, n]));
-  edges.forEach(([a,b]) => {
-    const p1 = byId[a], p2 = byId[b];
-    const path = document.createElementNS('http://www.w3.org/2000/svg','path');
-    const midx = (p1.x + p2.x)/2;
-    path.setAttribute('d', `M ${p1.x} ${p1.y} C ${midx} ${p1.y} ${midx} ${p2.y} ${p2.x} ${p2.y}`);
-    path.setAttribute('fill','none');
-    path.setAttribute('stroke', p2.active ? 'var(--accent)' : 'var(--line-strong)');
-    path.setAttribute('stroke-width','1');
-    path.setAttribute('stroke-dasharray', p2.active ? '0' : '3 3');
-    svg.appendChild(path);
-  });
+  const sessionStart = Date.now();
+  let activeId = null;
+  let lastSnapshot = [];
 
-  // nodes: need to convert svg space to host px using getBoundingClientRect proportions
-  function pxFromSvg(x, y) {
-    const r = host.getBoundingClientRect();
-    return { px: (x/1200) * r.width, py: (y/700) * r.height };
+  function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  function layout(nodes) {
+    const visible = nodes.filter(n => n.state !== 'closed');
+    const byId = new Map(visible.map(n => [n.tabId, n]));
+    const positions = new Map();
+    const rowsAt = [];
+    const walk = (n, depth) => {
+      if (!n || positions.has(n.tabId)) return;
+      while (rowsAt.length <= depth) rowsAt.push(0);
+      const row = rowsAt[depth]++;
+      positions.set(n.tabId, {
+        tabId: n.tabId,
+        depth,
+        row,
+        title: (n.title && n.title.trim()) || '(new tab)',
+        url: n.url || '',
+        parentId: (n.parentTabId && byId.has(n.parentTabId)) ? n.parentTabId : null,
+      });
+      visible.filter(c => c.parentTabId === n.tabId).forEach(c => walk(c, depth + 1));
+    };
+    visible.filter(n => !n.parentTabId || !byId.has(n.parentTabId)).forEach(r => walk(r, 0));
+    return { positions, depth: rowsAt.length, maxRow: Math.max(0, ...rowsAt) };
   }
 
-  nodes.forEach(n => {
-    const d = document.createElement('div');
-    d.className = 'graph-node' + (n.active ? ' active' : '') + (n.root ? ' root' : '');
-    const { px, py } = pxFromSvg(n.x, n.y);
-    d.style.left = px + 'px';
-    d.style.top = py + 'px';
-    d.innerHTML = `<div class="nh">${n.active ? '<span class="pin"></span>' : ''}<div class="host">${n.host}</div><div class="title">${n.title}</div></div>`;
-    host.appendChild(d);
+  function hostname(url, isRoot) {
+    if (isRoot && !url) return 'REV://start';
+    if (!url) return 'new tab';
+    try { return new URL(url).hostname || url; } catch { return url; }
+  }
+
+  function render(nodes) {
+    lastSnapshot = nodes;
+    const { positions, depth, maxRow } = layout(nodes);
+    svg.innerHTML = '';
+    host.querySelectorAll('.graph-node').forEach(el => el.remove());
+
+    if (positions.size === 0) {
+      const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      t.setAttribute('x', '600'); t.setAttribute('y', '350');
+      t.setAttribute('fill', 'var(--text-2)'); t.setAttribute('text-anchor', 'middle');
+      t.setAttribute('font-family', 'var(--font-mono)'); t.setAttribute('font-size', '12');
+      t.textContent = 'no tabs yet — open a tab to start the trail';
+      svg.appendChild(t);
+      updateStats(0, 0, 0);
+      return;
+    }
+
+    const cols = Math.max(1, depth);
+    const colWidth = 1000 / cols;
+    const rowCount = Math.max(1, maxRow);
+    const rowHeight = Math.min(110, 560 / rowCount);
+
+    const getPos = (p) => ({
+      x: 120 + p.depth * colWidth,
+      y: 80 + p.row * rowHeight + 40,
+    });
+
+    // edges
+    positions.forEach(p => {
+      if (!p.parentId || !positions.has(p.parentId)) return;
+      const a = getPos(positions.get(p.parentId));
+      const b = getPos(p);
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      const mx = (a.x + b.x) / 2;
+      path.setAttribute('d', `M ${a.x} ${a.y} C ${mx} ${a.y} ${mx} ${b.y} ${b.x} ${b.y}`);
+      path.setAttribute('fill', 'none');
+      const isActiveEdge = p.tabId === activeId;
+      path.setAttribute('stroke', isActiveEdge ? 'var(--accent)' : 'var(--line-strong)');
+      path.setAttribute('stroke-width', '1');
+      path.setAttribute('stroke-dasharray', isActiveEdge ? '0' : '3 3');
+      svg.appendChild(path);
+    });
+
+    // nodes
+    function pxFromSvg(x, y) {
+      const r = host.getBoundingClientRect();
+      return { px: (x / 1200) * r.width, py: (y / 700) * r.height };
+    }
+
+    positions.forEach(p => {
+      const d = document.createElement('div');
+      const isRoot = !p.parentId;
+      const isActive = p.tabId === activeId;
+      d.className = 'graph-node' + (isActive ? ' active' : '') + (isRoot ? ' root' : '');
+      d.dataset.tabId = p.tabId;
+      d.title = p.url;
+      const pos = getPos(p);
+      const { px, py } = pxFromSvg(pos.x, pos.y);
+      d.style.left = px + 'px';
+      d.style.top = py + 'px';
+      const hn = hostname(p.url, isRoot);
+      const titleText = p.title.length > 30 ? p.title.slice(0, 28) + '…' : p.title;
+      d.innerHTML =
+        '<div class="nh">' +
+        (isActive ? '<span class="pin"></span>' : '') +
+        '<div class="host">' + esc(hn) + '</div>' +
+        '<div class="title">' + esc(titleText) + '</div>' +
+        '</div>';
+      d.addEventListener('click', () => { if (bridge) bridge.switch(p.tabId); });
+      host.appendChild(d);
+    });
+
+    updateStats(positions.size, depth, 0);
+  }
+
+  function updateStats(count, depth, orphans) {
+    if (!stats) return;
+    const bs = stats.querySelectorAll('b');
+    if (bs[0]) bs[0].textContent = count;
+    if (bs[1]) bs[1].textContent = depth;
+    if (bs[3]) bs[3].textContent = orphans;
+  }
+
+  function updateSession() {
+    if (!stats) return;
+    const bs = stats.querySelectorAll('b');
+    if (!bs[2]) return;
+    const elapsed = Math.floor((Date.now() - sessionStart) / 1000);
+    const hh = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+    const mm = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+    const ss = String(elapsed % 60).padStart(2, '0');
+    bs[2].textContent = `${hh}:${mm}:${ss}`;
+  }
+
+  if (bridge) {
+    bridge.graphSnapshot().then(render).catch(() => render([]));
+    bridge.active().then(a => { activeId = a ? a.id : null; render(lastSnapshot); }).catch(() => {});
+    bridge.onGraphUpdated(render);
+    bridge.onActiveChanged(a => { activeId = a ? a.id : null; render(lastSnapshot); });
+  } else {
+    render([]);
+  }
+
+  window.addEventListener('resize', () => {
+    if (typeof state !== 'undefined' && state.screen === 'graph') render(lastSnapshot);
   });
-}
-buildGraph();
-window.addEventListener('resize', () => {
-  if (state.screen === 'graph') buildGraph();
-});
+
+  setInterval(updateSession, 1000);
+  updateSession();
+})();
 
 /* ---------- CLOCK / FAKE HUD ---------- */
 function tick() {

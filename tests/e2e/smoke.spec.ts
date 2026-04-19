@@ -214,6 +214,39 @@ test('tabs.create → tabs.list round-trip; tabs.close removes the tab', async (
   expect(list2.some((t: { id: string }) => t.id === created.id)).toBe(false);
 });
 
+test('tab graph renders live nodes + edges from tabs.graphSnapshot', async () => {
+  // Create a root tab and a child tab so the graph has ≥ 1 edge
+  const root = await win.evaluate(() =>
+    (window as any).revenant.tabs.create({ url: 'https://example.com/' }),
+  );
+  const child = await win.evaluate((parentId) =>
+    (window as any).revenant.tabs.create({ parentTabId: parentId, url: 'https://example.org/' }),
+    root.id,
+  );
+
+  // Switch to graph screen
+  await win.locator('.right-rail-btns button[data-screen="graph"]').click();
+  await expect(win.locator('.screen[data-screen="graph"]')).toHaveClass(/active/);
+
+  // At least 2 graph-node elements are rendered (root + child)
+  const count = await win.locator('#graph-canvas .graph-node').count();
+  expect(count).toBeGreaterThanOrEqual(2);
+
+  // NODES stat reflects the count
+  const nodesStat = await win.locator('.graph-stats b').first().textContent();
+  expect(Number(nodesStat)).toBeGreaterThanOrEqual(2);
+
+  // Edge <path> exists in the SVG between parent and child
+  const edgeCount = await win.locator('#graph-svg path').count();
+  expect(edgeCount).toBeGreaterThanOrEqual(1);
+
+  // Clean up
+  await win.evaluate((ids) => {
+    const t = (window as any).revenant.tabs;
+    ids.forEach((id: string) => t.close(id));
+  }, [child.id, root.id]);
+});
+
 test('tabs.reshuffleIdentity returns a fresh identity shell', async () => {
   const created = await win.evaluate(() =>
     (window as any).revenant.tabs.create({ url: 'https://example.com/' }),

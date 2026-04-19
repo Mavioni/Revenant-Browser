@@ -1,0 +1,154 @@
+<!doctype html>
+<!--
+  Revenant Browser — Tab Graph, finished-state preview
+  Rendered 2026-04-18 via the imagine-if skill to anchor what "screen 03 completed" looks like.
+  Not production code. A pixel reference for Operator.
+
+  Aesthetic: Black Widow monochrome + crimson accent (#b91c1c), hexagonal vortex geometry,
+  predatory spider-web of the research trail. Opera-GX polish, Ghost-in-Shell restraint.
+-->
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Revenant Tab Graph — finished state</title>
+<style>
+  :root {
+    --bg-0: #0a0a0a;
+    --bg-1: #141414;
+    --bg-2: #1e1e1e;
+    --text-0: #fcfcfc;
+    --text-1: #a3a3a3;
+    --text-2: #606060;
+    --grid: rgba(255,255,255,0.03);
+    --accent: #b91c1c;
+    --accent-soft: rgba(185,28,28,0.18);
+    --accent-glow: rgba(185,28,28,0.45);
+  }
+  html, body { margin: 0; background: var(--bg-0); color: var(--text-0); font-family: 'Space Grotesk', system-ui, sans-serif; }
+  body {
+    background:
+      radial-gradient(1200px 800px at 50% 40%, rgba(185,28,28,0.06), transparent 60%),
+      linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 32px 32px,
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 32px 32px,
+      var(--bg-0);
+    min-height: 100vh;
+    padding: 24px;
+  }
+  header { display: flex; align-items: baseline; gap: 16px; margin-bottom: 12px; letter-spacing: 0.06em; }
+  .kicker { color: var(--accent); font-family: 'JetBrains Mono', monospace; font-size: 11px; text-transform: uppercase; }
+  h1 { font-family: 'Space Grotesk', serif; font-weight: 500; font-size: 22px; margin: 0; }
+  .tag { color: var(--text-2); font-family: 'JetBrains Mono', monospace; font-size: 10px; margin-left: auto; }
+  svg { width: 100%; height: calc(100vh - 140px); display: block; }
+  .edge { stroke: var(--text-2); stroke-width: 1; opacity: 0.45; fill: none; }
+  .edge.active { stroke: var(--accent); opacity: 0.9; stroke-width: 1.5; filter: drop-shadow(0 0 4px var(--accent-glow)); }
+  .node-hex { fill: var(--bg-1); stroke: var(--text-2); stroke-width: 1; transition: all 120ms ease; }
+  .node.active .node-hex { fill: var(--bg-2); stroke: var(--accent); stroke-width: 1.5; filter: drop-shadow(0 0 6px var(--accent-glow)); }
+  .node.parent .node-hex { stroke: rgba(252,252,252,0.2); }
+  .node text { font-family: 'JetBrains Mono', monospace; font-size: 9px; fill: var(--text-1); text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+  .node.active text { fill: var(--text-0); }
+  .node .sub { font-size: 7px; fill: var(--text-2); }
+  .node:hover .node-hex { stroke: var(--text-0); cursor: pointer; }
+  .visit-bead { fill: var(--text-2); opacity: 0.55; }
+  .edge-label { font-family: 'JetBrains Mono', monospace; font-size: 8px; fill: var(--text-2); text-anchor: middle; opacity: 0.65; }
+  footer { position: fixed; bottom: 12px; left: 24px; right: 24px; display: flex; gap: 24px; color: var(--text-2); font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.08em; }
+  footer .legend { display: inline-flex; align-items: center; gap: 6px; }
+  footer .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+  footer .ring { width: 10px; height: 10px; border: 1px solid var(--text-2); border-radius: 50%; }
+  @keyframes pulse { 0%, 100% { opacity: .45 } 50% { opacity: .9 } }
+  .edge.live { animation: pulse 3s ease-in-out infinite; }
+  @keyframes orbit { to { stroke-dashoffset: -200; } }
+  .edge.active { stroke-dasharray: 4 2; animation: orbit 18s linear infinite; }
+</style></head><body>
+
+<header>
+  <div class="kicker">REV://graph · live</div>
+  <h1><i>The research trail</i></h1>
+  <div class="tag">14 tabs · 62 visits · ghost-reykjavik</div>
+</header>
+
+<svg viewBox="0 0 1400 820" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <symbol id="hex" viewBox="-50 -50 100 100">
+      <polygon class="node-hex" points="43.3,-25 43.3,25 0,50 -43.3,25 -43.3,-25 0,-50"/>
+    </symbol>
+  </defs>
+
+  <!-- edges (drawn first, under nodes) -->
+  <!-- start -> github -->
+  <path class="edge" d="M 220 410 Q 340 350 450 320"/>
+  <!-- github -> chromium/chromium -->
+  <path class="edge" d="M 530 290 Q 650 240 770 220"/>
+  <!-- github -> chromium README -->
+  <path class="edge" d="M 530 290 Q 650 280 770 320"/>
+  <!-- chromium -> arxiv ternary paper -->
+  <path class="edge active live" d="M 850 200 Q 970 190 1090 170"/>
+  <!-- chromium -> wired article -->
+  <path class="edge" d="M 850 200 Q 970 260 1090 300"/>
+  <!-- start -> hn -->
+  <path class="edge" d="M 220 450 Q 340 490 450 520"/>
+  <!-- hn -> onion ahmia -->
+  <path class="edge" d="M 530 540 Q 650 570 770 580"/>
+  <!-- hn -> substack -->
+  <path class="edge" d="M 530 540 Q 650 610 770 650"/>
+  <!-- start -> wallet -->
+  <path class="edge" d="M 220 410 Q 340 420 450 420"/>
+  <!-- wallet -> etherscan -->
+  <path class="edge" d="M 530 420 Q 650 400 770 400"/>
+  <!-- etherscan -> defi dashboard -->
+  <path class="edge" d="M 850 400 Q 970 430 1090 450"/>
+  <!-- start -> copilot context folder -->
+  <path class="edge" d="M 220 380 Q 340 310 450 250"/>
+  <!-- split-view leaf from arxiv -->
+  <path class="edge active live" d="M 1150 170 Q 1220 150 1280 130"/>
+
+  <!-- visit beads on the active edge (chromium -> arxiv) -->
+  <circle class="visit-bead" cx="920" cy="195" r="1.5"/>
+  <circle class="visit-bead" cx="975" cy="188" r="1.5"/>
+  <circle class="visit-bead" cx="1025" cy="180" r="1.5"/>
+  <circle class="visit-bead" cx="1060" cy="175" r="1.5"/>
+
+  <!-- nodes -->
+  <!-- start (root) -->
+  <g class="node parent" transform="translate(180,430)"><use href="#hex"/><text y="-2">REV://start</text><text y="9" class="sub">ghost · reykjavik</text></g>
+
+  <!-- github profile -->
+  <g class="node" transform="translate(490,300)"><use href="#hex"/><text y="-2">github.com</text><text y="9" class="sub">Mavioni</text></g>
+  <!-- chromium repo -->
+  <g class="node" transform="translate(810,200)"><use href="#hex"/><text y="-2">chromium</text><text y="9" class="sub">/chromium</text></g>
+  <!-- chromium readme leaf -->
+  <g class="node" transform="translate(810,320)"><use href="#hex"/><text y="-2">CLAUDE.md</text><text y="9" class="sub">docs/</text></g>
+
+  <!-- arxiv ternary paper (ACTIVE) -->
+  <g class="node active" transform="translate(1130,170)"><use href="#hex"/><text y="-2">arxiv.org</text><text y="9" class="sub">2603.04921</text></g>
+
+  <!-- wired article -->
+  <g class="node" transform="translate(1130,300)"><use href="#hex"/><text y="-2">wired.com</text><text y="9" class="sub">browser-os</text></g>
+
+  <!-- split view — new window from arxiv -->
+  <g class="node" transform="translate(1330,130)"><use href="#hex"/><text y="-2">scholar</text><text y="9" class="sub">cite-graph</text></g>
+
+  <!-- hn -->
+  <g class="node" transform="translate(490,540)"><use href="#hex"/><text y="-2">hn</text><text y="9" class="sub">news.yc</text></g>
+  <!-- onion ahmia -->
+  <g class="node" transform="translate(810,580)"><use href="#hex"/><text y="-2">[onion]</text><text y="9" class="sub">ahmia · 3-hop</text></g>
+  <!-- substack -->
+  <g class="node" transform="translate(810,660)"><use href="#hex"/><text y="-2">substack</text><text y="9" class="sub">stratechery</text></g>
+
+  <!-- wallet -->
+  <g class="node" transform="translate(490,420)"><use href="#hex"/><text y="-2">rev://wallet</text><text y="9" class="sub">0xA4f9…</text></g>
+  <!-- etherscan -->
+  <g class="node" transform="translate(810,400)"><use href="#hex"/><text y="-2">etherscan</text><text y="9" class="sub">0xA4f9</text></g>
+  <!-- defi dashboard -->
+  <g class="node" transform="translate(1130,450)"><use href="#hex"/><text y="-2">defillama</text><text y="9" class="sub">positions</text></g>
+
+  <!-- copilot context folder -->
+  <g class="node" transform="translate(490,240)"><use href="#hex"/><text y="-2">REV://ctx</text><text y="9" class="sub">research · 22</text></g>
+</svg>
+
+<footer>
+  <span class="legend"><span class="ring"></span> closed</span>
+  <span class="legend"><span class="dot"></span> active · arxiv.org/abs/2603.04921</span>
+  <span class="legend">click a hex to switch tabs · drag to pan · wheel to zoom</span>
+  <span style="margin-left:auto;">build 0.9.13 · ternary core online</span>
+</footer>
+
+</body></html>
