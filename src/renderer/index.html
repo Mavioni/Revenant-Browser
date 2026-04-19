@@ -2348,35 +2348,7 @@
             <h3><span class="dot"></span>Revenant Copilot</h3>
             <div class="model">LOCAL · 7B</div>
           </div>
-          <div class="copilot-msgs">
-            <div class="msg user">
-              <div class="who">YOU</div>
-              <div class="bubble">tl;dr the page + what's the catch?</div>
-            </div>
-            <div class="msg">
-              <div class="who">REVENANT</div>
-              <div class="bubble">
-                Four-year production study of a <b>ternary-routed browser egress</b> system across 412K DAU.<br><br>
-                <b>Result:</b> resistant to single-ISP observation, rogue-node injection, and timing-correlation attacks.<br>
-                <b>Cost:</b> 2.8× bandwidth overhead and +41ms p50 latency.<br>
-                <b>Verdict:</b> 94% of users don't notice. Privacy is the #1 retention driver.
-                <div class="ref">
-                  <a>¶2</a><a>¶4</a><a>table-3</a><a>fig-5</a>
-                </div>
-              </div>
-            </div>
-            <div class="msg user">
-              <div class="who">YOU</div>
-              <div class="bubble">compare bandwidth overhead to Tor</div>
-            </div>
-            <div class="msg">
-              <div class="who">REVENANT</div>
-              <div class="bubble">
-                Paper cites Tor at <b>3.4–4.1×</b> overhead with p50 latency +180–320ms (depending on circuit length). Ternary-routed egress sits at <b>2.8× / +41ms</b> — roughly <b>4× faster</b> for comparable anonymity at 3 hops.
-                <div class="ref"><a>§5.2</a><a>tor-metrics</a></div>
-              </div>
-            </div>
-          </div>
+          <div class="copilot-msgs" id="copilot-msgs"></div>
           <div class="copilot-actions">
             <span class="chip">Summarize</span>
             <span class="chip">Extract citations</span>
@@ -3606,6 +3578,120 @@ function setAccent(c) {
   });
 
   setTimeout(syncVisibility, 50);
+})();
+
+/* ---------- COPILOT (live, driven by window.revenant.tool.execute) ---------- */
+(function initCopilot() {
+  const bridge = window.revenant;
+  const msgs = document.getElementById('copilot-msgs');
+  const input = document.querySelector('.copilot-input input');
+  const sendBtn = document.querySelector('.copilot-input .send');
+  const chips = document.querySelectorAll('.copilot-actions .chip');
+  const modelBadge = document.querySelector('.copilot-hdr .model');
+  if (!bridge || !msgs || !input || !sendBtn) return;
+
+  if (modelBadge) modelBadge.textContent = 'LOCAL · ANBU-CMD';
+
+  function esc(s) { return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+  // Minimal markdown: bold **x**, italic *x*, linebreaks
+  function lightMd(s) {
+    return esc(s)
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+      .replace(/(^|\s)\*([^*]+)\*(?=\s|$)/g, '$1<i>$2</i>')
+      .replace(/\n/g, '<br>');
+  }
+
+  function appendMessage(who, content, isUser, asMarkdown) {
+    const msg = document.createElement('div');
+    msg.className = 'msg' + (isUser ? ' user' : '');
+    const body = asMarkdown ? lightMd(content) : esc(content);
+    msg.innerHTML = '<div class="who">' + esc(who) + '</div><div class="bubble">' + body + '</div>';
+    msgs.appendChild(msg);
+    msgs.scrollTop = msgs.scrollHeight;
+    return msg;
+  }
+
+  // Greeting — explicit about being local
+  appendMessage('REVENANT', 'Ghost lane online. Local model, no external calls. Ask, scrape, automate — or tap a chip.', false, false);
+
+  async function currentTabContext() {
+    try {
+      if (!bridge.tabs || !bridge.tabs.active) return '';
+      const active = await bridge.tabs.active();
+      if (!active || !active.url) return '';
+      const title = (active.title || '').trim();
+      return '\n\n[Active tab: ' + (title ? title + ' — ' : '') + active.url + ']';
+    } catch { return ''; }
+  }
+
+  async function send(text) {
+    const trimmed = (text || '').trim();
+    if (!trimmed) return;
+    input.value = '';
+    input.disabled = true;
+    sendBtn.style.opacity = '0.4';
+    appendMessage('YOU', trimmed, true, false);
+    const thinking = appendMessage('REVENANT', '…', false, false);
+    thinking.classList.add('thinking');
+
+    try {
+      const context = await currentTabContext();
+      const result = await bridge.tool.execute(
+        'Revenant Copilot query',
+        'observe',
+        'User invoked Copilot sidebar',
+        trimmed + context,
+      );
+      thinking.remove();
+      if (result && result.status === 'executed' && result.output) {
+        appendMessage('REVENANT', String(result.output).trim(), false, true);
+      } else if (result && (result.error || result.output)) {
+        appendMessage('REVENANT', '[error: ' + String(result.error || result.output) + ']', false, false);
+      } else if (result && result.status === 'blocked') {
+        appendMessage('REVENANT', '[request queued for approval in Governance]', false, false);
+      } else {
+        appendMessage('REVENANT', '[no response from gateway]', false, false);
+      }
+    } catch (err) {
+      thinking.remove();
+      appendMessage('REVENANT', '[error: ' + (err && err.message ? err.message : String(err)) + ']', false, false);
+    } finally {
+      input.disabled = false;
+      sendBtn.style.opacity = '';
+      input.focus();
+    }
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send(input.value);
+    }
+  });
+  sendBtn.addEventListener('click', () => send(input.value));
+  sendBtn.style.cursor = 'pointer';
+
+  const chipPrompts = {
+    'Summarize': 'Summarize the current page in 3 concise sentences.',
+    'Extract citations': 'Extract all citations and references from the current page as a bulleted markdown list.',
+    'Scrape table': 'If the current page has a primary data table, render it as a markdown table. Otherwise note that no table is present.',
+    'Save to Vault': '__vault__',
+    'Translate': 'Translate the main content of the current page into English. If it is already English, translate into French.',
+  };
+  chips.forEach((chip) => {
+    chip.style.cursor = 'pointer';
+    chip.addEventListener('click', () => {
+      const label = (chip.textContent || '').trim();
+      const prompt = chipPrompts[label];
+      if (prompt === '__vault__') {
+        appendMessage('REVENANT', 'Vault save — coming in Phase B (scheduled). For now, bookmark via your OS or copy the URL.', false, false);
+        return;
+      }
+      if (prompt) send(prompt);
+      else send(label);
+    });
+  });
 })();
 
 </script>
